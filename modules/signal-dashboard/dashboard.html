@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strategy Monitor</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="logo">
+                <img src="assets/images/dfi-labs-logo.png" alt="DFI Labs" class="logo-image">
+                <div class="logo-text">
+                    <span class="logo-main">Strategy Monitor</span>
+                    <span class="logo-subtitle">DFI Labs</span>
+                </div>
+            </div>
+            <div class="header-info">
+                <div class="status-indicator">
+                    <div class="status-dot active"></div>
+                    <span>Live</span>
+                </div>
+                <span id="current-time">Loading...</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="main">
+        <div class="container">
+            <div class="dashboard-header">
+                <h1>Live Portfolio Dashboard</h1>
+                <p>Real-time cryptocurrency strategy monitoring & performance tracking</p>
+            </div>
+
+            <!-- Delta Donut Chart -->
+            <div class="delta-donut-section">
+                <div class="delta-donut-card">
+                    <div class="delta-header">
+                        <h3>Portfolio Exposure</h3>
+                        <div class="delta-status">
+                            <span class="delta-label">NET DELTA</span>
+                            <span class="delta-value" id="delta-value">Loading...</span>
+                        </div>
+                    </div>
+                    <div class="donut-container">
+                        <canvas id="delta-donut-chart" width="120" height="120"></canvas>
+                        <div class="donut-center">
+                            <div class="donut-percentage" id="delta-percentage">0%</div>
+                            <div class="donut-label">DELTA</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Core Metrics -->
+            <div class="summary-cards">
+                <div class="card primary-metric">
+                    <h3>Portfolio Value</h3>
+                    <div class="value" id="portfolio-value">Loading...</div>
+                    <div class="subtitle">as of <span id="portfolio-time">Loading...</span></div>
+                </div>
+                <div class="card">
+                    <h3>Daily P&L</h3>
+                    <div class="value" id="daily-pnl">Loading...</div>
+                    <div class="percentage" id="daily-pnl-percent"></div>
+                </div>
+                <div class="card">
+                    <h3>Total P&L Since Reset</h3>
+                    <div class="value" id="total-pnl">Loading...</div>
+                    <div class="percentage" id="total-pnl-percent"></div>
+                </div>
+                <div class="card">
+                    <h3>Total Notional at Entry</h3>
+                    <div class="value" id="total-notional">$1,000,000.00</div>
+                </div>
+                <div class="card">
+                    <h3>Positions</h3>
+                    <div class="value" id="positions-count">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Portfolio Value Chart with Time Scales -->
+            <div class="chart-section">
+                <div class="chart-header">
+                    <h2>Portfolio Performance</h2>
+                    <div class="csv-info" onclick="toggleCSVInfo()" title="Click to show current CSV">
+                        <span class="csv-indicator">📊</span>
+                        <span class="csv-filename" id="csv-filename" style="display: none;">Loading...</span>
+                    </div>
+                </div>
+                <div class="chart-controls">
+                    <button class="time-button active" onclick="loadChartData('1D')">1D</button>
+                    <button class="time-button" onclick="loadChartData('7D')">7D</button>
+                    <button class="time-button" onclick="loadChartData('1M')">1M</button>
+                    <button class="refresh-button" onclick="createSnapshot()" title="Force Update Now">🔄</button>
+                </div>
+                <div class="chart-container">
+                    <canvas id="portfolio-chart"></canvas>
+                </div>
+            </div>
+
+            <!-- Top Performers -->
+            <div class="top-performers">
+                <div class="top-performers-card longs">
+                    <h4>Top Long Performers</h4>
+                    <div id="top-long-performers">
+                        <div class="loading">Loading top long performers...</div>
+                    </div>
+                </div>
+                <div class="top-performers-card shorts">
+                    <h4>Top Short Performers</h4>
+                    <div id="top-short-performers">
+                        <div class="loading">Loading top short performers...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Positions Table -->
+            <div class="positions-section">
+                <h2>Long Positions</h2>
+                <div class="positions-table">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Side</th>
+                                <th>Weight %</th>
+                                <th>Notional $</th>
+                                <th>Entry Price</th>
+                                <th>Mark Price</th>
+                                <th>P&L $</th>
+                                <th>P&L %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="long-positions">
+                            <tr><td colspan="8" class="loading">Loading long positions...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="positions-section">
+                <h2>Short Positions</h2>
+                <div class="positions-table">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Side</th>
+                                <th>Weight %</th>
+                                <th>Notional $</th>
+                                <th>Entry Price</th>
+                                <th>Mark Price</th>
+                                <th>P&L $</th>
+                                <th>P&L %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="short-positions">
+                            <tr><td colspan="8" class="loading">Loading short positions...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+    <script>
+        // Core state - single source of truth
+        let currentSnapshot = {
+            timestamp: null,
+            portfolioValue: 1000000, // Start with $1M
+            dailyPnL: 0,
+            positions: [],
+            baselinePrices: {},
+            currentPrices: {}
+        };
+
+        const initialCapital = 1000000;
+        let portfolioChart = null;
+
+        // Update time display
+        function updateTime() {
+            const now = new Date();
+            const utcTime = now.toISOString().substr(11, 8);
+            const parisTime = new Date(now.getTime() + (2 * 60 * 60 * 1000)).toISOString().substr(11, 8);
+            document.getElementById('current-time').textContent = `${utcTime} / ${parisTime} UTC / Paris`;
+        }
+
+        // Track current CSV to detect changes
+        let currentCSVFilename = null;
+        
+        // Load daily CSV and set baseline
+        async function loadDailyCSV() {
+            try {
+                // Find latest post_execution row
+                const response = await fetch('/signal-dashboard/data/portfolio_daily_log.csv');
+                const csvText = await response.text();
+                const lines = csvText.split('\n');
+                
+                let latestRow = null;
+                for (let i = lines.length - 1; i >= 0; i--) {
+                    if (lines[i].includes('post_execution')) {
+                        latestRow = lines[i].split(',');
+                        break;
+                    }
+                }
+                
+                if (!latestRow) {
+                    throw new Error('No post_execution row found');
+                }
+                
+                // Check if CSV has changed
+                const csvFilename = latestRow[4];
+                if (csvFilename === currentCSVFilename) {
+                    console.log('CSV unchanged, skipping reload');
+                    return false; // No change
+                }
+                
+                console.log(`New CSV detected: ${csvFilename} (was: ${currentCSVFilename})`);
+                currentCSVFilename = csvFilename;
+                updateCSVFilename(csvFilename);
+                
+                // Load positions from the CSV file
+                const portfolioResponse = await fetch(`/signal-dashboard/data/${csvFilename}`);
+                const portfolioCsv = await portfolioResponse.text();
+                const portfolioLines = portfolioCsv.split('\n');
+                const portfolioHeaders = portfolioLines[0].split(',');
+                
+                const positions = [];
+                for (let i = 1; i < portfolioLines.length; i++) {
+                    if (portfolioLines[i].trim()) {
+                        const values = portfolioLines[i].split(',');
+                        const position = {};
+                        portfolioHeaders.forEach((header, index) => {
+                            position[header.trim()] = values[index] ? values[index].trim() : '';
+                        });
+                        positions.push(position);
+                    }
+                }
+                
+                console.log(`Loaded ${positions.length} positions from ${csvFilename}`);
+                
+                // Set baseline prices (current market prices at CSV execution)
+                const baselinePrices = await fetchBaselinePrices(positions);
+                
+                // Update current snapshot
+                currentSnapshot.positions = positions;
+                currentSnapshot.baselinePrices = baselinePrices;
+                currentSnapshot.dailyPnL = 0; // Reset daily P&L
+                
+                console.log('Daily CSV loaded, baseline set, Daily P&L reset to 0');
+                return true; // CSV changed
+                
+            } catch (error) {
+                console.error('Error loading daily CSV:', error);
+                return false;
+            }
+        }
+
+        // Load baseline prices from daily_baseline.json
+        async function fetchBaselinePrices(positions) {
+            try {
+                const response = await fetch('/signal-dashboard/data/daily_baseline.json');
+                const baseline = await response.json();
+                return baseline.prices || {};
+            } catch (error) {
+                console.error('Error loading baseline prices:', error);
+                return {};
+            }
+        }
+        
+        // Fetch current mark prices from Binance API (Issue #2 fix)
+        async function fetchCurrentPrices(positions) {
+            const symbols = positions.map(p => (p.ticker || p.ric || p.internal_code).replace('_', ''));
+            console.log('🔍 Fetching mark prices for symbols:', symbols);
+            
+            const promises = symbols.map(symbol => 
+                fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`)
+                    .then(res => {
+                        if (!res.ok) {
+                            throw new Error(`HTTP ${res.status} for ${symbol}`);
+                        }
+                        return res.json();
+                    })
+                    .then(data => {
+                        console.log(`✅ ${symbol}: ${data.markPrice}`);
+                        return { symbol, price: parseFloat(data.markPrice) };
+                    })
+                    .catch(error => {
+                        console.error(`❌ Failed to fetch ${symbol}:`, error);
+                        return { symbol, price: null };
+                    })
+            );
+            
+            const results = await Promise.all(promises);
+            const currentPrices = {};
+            let successCount = 0;
+            results.forEach(({ symbol, price }) => {
+                if (price !== null) {
+                    currentPrices[symbol] = price;
+                    successCount++;
+                }
+            });
+            
+            console.log(`📊 Fetched ${successCount}/${symbols.length} prices successfully`);
+            return currentPrices;
+        }
+
+        // Create new snapshot (single source of truth)
+        async function createSnapshot() {
+            console.log('🔄 Creating new snapshot...', new Date().toISOString());
+            if (currentSnapshot.positions.length === 0) {
+                console.log('No positions loaded yet');
+                return;
+            }
+            
+            // Fetch current prices from Binance
+            const currentPrices = await fetchCurrentPrices(currentSnapshot.positions);
+            
+            // Calculate Daily P&L (vs baseline)
+            let dailyPnL = 0;
+            let calculatedPositions = 0;
+            console.log('🔍 Calculating Daily P&L...');
+            
+            currentSnapshot.positions.forEach(position => {
+                const symbol = (position.ticker || position.ric || position.internal_code).replace('_', '');
+                const baselinePrice = currentSnapshot.baselinePrices[symbol];
+                const currentPrice = currentPrices[symbol];
+                const notional = parseFloat(position.target_notional || 0);
+                const side = parseFloat(position.target_contracts) > 0 ? 1 : -1;
+                
+                if (baselinePrice && currentPrice) {
+                    const pnl = side * (currentPrice - baselinePrice) / baselinePrice * Math.abs(notional);
+                    dailyPnL += pnl;
+                    calculatedPositions++;
+                    
+                    if (calculatedPositions <= 3) {
+                        console.log(`🔍 ${symbol}: baseline=${baselinePrice}, current=${currentPrice}, side=${side}, notional=${notional.toFixed(0)}, pnl=${pnl.toFixed(2)}`);
+                    }
+                } else {
+                    console.log(`⚠️ Missing data for ${symbol}: baseline=${!!baselinePrice}, current=${!!currentPrice}`);
+                }
+            });
+            
+            console.log(`📊 Calculated ${calculatedPositions} positions, total P&L: ${dailyPnL.toFixed(2)}`);
+            
+            // Update snapshot
+            currentSnapshot.timestamp = new Date();
+            currentSnapshot.currentPrices = currentPrices;
+            currentSnapshot.dailyPnL = dailyPnL;
+            currentSnapshot.portfolioValue = initialCapital + dailyPnL; // Simple: PV = 1M + Daily P&L
+            
+            // Update UI with this snapshot
+            updateUI();
+            
+            // Log PV for chart
+            logPortfolioValue();
+        }
+
+        // Update UI with current snapshot
+        function updateUI() {
+            const snapshot = currentSnapshot;
+            console.log('🔄 Updating UI with snapshot:', {
+                timestamp: snapshot.timestamp?.toISOString(),
+                portfolioValue: snapshot.portfolioValue,
+                dailyPnL: snapshot.dailyPnL,
+                currentPricesCount: Object.keys(snapshot.currentPrices || {}).length
+            });
+            console.log('🔄 UI Update timestamp:', new Date().toISOString());
+            
+            // Portfolio Value
+            document.getElementById('portfolio-value').textContent = formatCurrency(snapshot.portfolioValue);
+            const timeStr = snapshot.timestamp ? snapshot.timestamp.toISOString().substr(11, 8) + ' UTC' : 'Loading...';
+            document.getElementById('portfolio-time').textContent = timeStr;
+            
+            // Add a visual indicator that updates are happening
+            const timeElement = document.getElementById('portfolio-time');
+            timeElement.style.backgroundColor = '#28a745';
+            timeElement.style.color = 'white';
+            timeElement.style.padding = '2px 6px';
+            timeElement.style.borderRadius = '3px';
+            setTimeout(() => {
+                timeElement.style.backgroundColor = '';
+                timeElement.style.color = '';
+                timeElement.style.padding = '';
+                timeElement.style.borderRadius = '';
+            }, 1000);
+            
+            // Daily P&L
+            document.getElementById('daily-pnl').textContent = formatCurrency(snapshot.dailyPnL);
+            document.getElementById('daily-pnl').className = `value ${snapshot.dailyPnL >= 0 ? 'positive' : 'negative'}`;
+            document.getElementById('daily-pnl-percent').textContent = `(${formatPercentage((snapshot.dailyPnL / initialCapital) * 100)})`;
+            document.getElementById('daily-pnl-percent').className = `percentage ${snapshot.dailyPnL >= 0 ? 'positive' : 'negative'}`;
+            
+            // Total P&L = PV - 1M
+            const totalPnL = snapshot.portfolioValue - initialCapital;
+            document.getElementById('total-pnl').textContent = formatCurrency(totalPnL);
+            document.getElementById('total-pnl').className = `value ${totalPnL >= 0 ? 'positive' : 'negative'}`;
+            document.getElementById('total-pnl-percent').textContent = `(${formatPercentage((totalPnL / initialCapital) * 100)})`;
+            document.getElementById('total-pnl-percent').className = `percentage ${totalPnL >= 0 ? 'positive' : 'negative'}`;
+            
+            // Positions count
+            document.getElementById('positions-count').textContent = snapshot.positions.length;
+            
+            // Update delta donut chart
+            createDeltaDonutChart();
+            
+            // Update top performers
+            updateTopPerformers();
+            
+            // Update table
+            updatePositionsTable();
+        }
+
+        // Update positions table
+        function updatePositionsTable() {
+            const snapshot = currentSnapshot;
+            if (snapshot.positions.length === 0) return;
+            
+            const longPositions = snapshot.positions.filter(p => parseFloat(p.target_contracts) > 0);
+            const shortPositions = snapshot.positions.filter(p => parseFloat(p.target_contracts) < 0);
+            
+            populatePositionTable('long-positions', longPositions, snapshot);
+            populatePositionTable('short-positions', shortPositions, snapshot);
+        }
+
+        function populatePositionTable(tableId, positions, snapshot) {
+            const tbody = document.getElementById(tableId);
+            tbody.innerHTML = '';
+            
+            positions.forEach(position => {
+                const symbol = position.ticker || position.ric || position.internal_code || 'N/A';
+                const binanceSymbol = symbol.replace('_', '');
+                const entryPrice = parseFloat(position.ref_price || 0);
+                const baselinePrice = snapshot.baselinePrices[binanceSymbol];
+                const currentPrice = snapshot.currentPrices[binanceSymbol];
+                const notional = parseFloat(position.target_notional || 0);
+                const side = parseFloat(position.target_contracts) > 0 ? 'LONG' : 'SHORT';
+                const weight = (Math.abs(notional) / initialCapital) * 100;
+                
+                let pnl = 0;
+                let pnlPercent = 0;
+                
+                if (baselinePrice && currentPrice) {
+                    const sideMultiplier = parseFloat(position.target_contracts) > 0 ? 1 : -1;
+                    pnl = sideMultiplier * (currentPrice - baselinePrice) / baselinePrice * Math.abs(notional);
+                    // Fix Issue #1: Correct P&L% calculation for shorts
+                    pnlPercent = sideMultiplier * (currentPrice - baselinePrice) / baselinePrice * 100;
+                }
+                
+                const row = document.createElement('tr');
+                row.className = 'position-row';
+                
+                // Add winning position highlight
+                if (pnl > 0) {
+                    row.classList.add('winning');
+                }
+                
+                // Add top performer highlight (top 3 by absolute P&L)
+                const isTopPerformer = checkIfTopPerformer(symbol, pnl, side);
+                if (isTopPerformer) {
+                    row.classList.add('top-performer');
+                }
+                
+                row.innerHTML = `
+                    <td class="symbol" data-symbol="${symbol}">${symbol}</td>
+                    <td class="${side === 'LONG' ? 'side-long' : 'side-short'}">${side}</td>
+                    <td>${weight.toFixed(2)}%</td>
+                    <td>${formatCurrency(Math.abs(notional))}</td>
+                    <td>${entryPrice ? entryPrice.toFixed(6) : 'N/A'}</td>
+                    <td>${currentPrice ? currentPrice.toFixed(6) : 'Loading...'}</td>
+                    <td class="${pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pnl)}</td>
+                    <td class="${pnlPercent >= 0 ? 'positive' : 'negative'}">${pnlPercent.toFixed(2)}%</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        // PV logging to S3 for persistence
+        let pvLogs = [];
+        
+        async function logPortfolioValue() {
+            const logEntry = {
+                timestamp: currentSnapshot.timestamp.toISOString(),
+                portfolioValue: currentSnapshot.portfolioValue,
+                dailyPnL: currentSnapshot.dailyPnL
+            };
+            
+            console.log('📊 Logging PV:', logEntry);
+            
+            // Store in browser memory for immediate chart update
+            pvLogs.push(logEntry);
+            
+            // Keep only last 24 hours in memory
+            const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            pvLogs = pvLogs.filter(log => new Date(log.timestamp) > oneDayAgo);
+            
+            console.log(`📈 PV Logs: ${pvLogs.length} entries, latest: ${logEntry.portfolioValue}`);
+            // Don't update chart here - let the S3 data stay visible
+            // updateChart();
+        }
+
+        // Load historical PV data from S3 portfolio_value_log.jsonl
+        async function loadHistoricalPVData(timeframe) {
+            try {
+                const response = await fetch('/signal-dashboard/data/portfolio_value_log.jsonl');
+                if (!response.ok) {
+                    console.log('No S3 PV data available yet');
+                    return [];
+                }
+                
+                const text = await response.text();
+                console.log('📄 Raw S3 text length:', text.length);
+                
+                const lines = text.trim().split('\n').filter(line => line.trim());
+                console.log('📄 S3 lines count:', lines.length);
+                
+                const data = lines.map(line => {
+                    try {
+                        return JSON.parse(line);
+                    } catch (e) {
+                        console.error('❌ Error parsing line:', line);
+                        return null;
+                    }
+                }).filter(item => item !== null);
+                
+                console.log(`📊 Loaded ${data.length} PV points from S3`);
+                console.log('📊 First data point:', data[0]);
+                console.log('📊 Last data point:', data[data.length - 1]);
+                
+                // Filter by timeframe - be more aggressive about filtering
+                const now = new Date();
+                let cutoffDate;
+                switch(timeframe) {
+                    case '1D':
+                        cutoffDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                        break;
+                    case '7D':
+                        cutoffDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                        break;
+                    case '1M':
+                        cutoffDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                        break;
+                    default:
+                        cutoffDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                }
+                
+                const filteredData = data.filter(log => {
+                    const logDate = new Date(log.timestamp);
+                    return logDate >= cutoffDate && logDate <= now;
+                });
+                
+                console.log(`📊 Filtered to ${filteredData.length} points for ${timeframe} timeframe`);
+                console.log(`📊 Cutoff date: ${cutoffDate.toISOString()}`);
+                console.log(`📊 Now: ${now.toISOString()}`);
+                console.log(`📊 Data range: ${filteredData[0]?.timestamp} to ${filteredData[filteredData.length-1]?.timestamp}`);
+                
+                // Return filtered data sorted by timestamp
+                return filteredData.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                
+            } catch (error) {
+                console.error('Error loading historical PV data:', error);
+                return [];
+            }
+        }
+        
+        // Load chart data for different timeframes
+        async function loadChartData(timeframe) {
+            // Update button states
+            document.querySelectorAll('.time-button').forEach(btn => btn.classList.remove('active'));
+            document.querySelector(`[onclick="loadChartData('${timeframe}')"]`).classList.add('active');
+            
+            // Load historical data
+            const historicalData = await loadHistoricalPVData(timeframe);
+            
+            // Use historical data directly (it's already the full dataset from S3)
+            updateChart(historicalData, timeframe);
+        }
+        
+        // Update chart with data
+        function updateChart(data = pvLogs, timeframe = '1D') {
+            // Always show chart, even with no data
+            if (data.length === 0) {
+                console.log('📊 No data available, showing empty chart');
+                data = [{
+                    timestamp: new Date().toISOString(),
+                    portfolioValue: 1000000,
+                    daily_pnl: 0,
+                    total_pnl: 0
+                }];
+            }
+            
+            console.log(`📊 Updating chart with ${data.length} data points`);
+            console.log('📊 Chart data sample:', data.slice(0, 3));
+            console.log('📊 Full data length:', data.length);
+            console.log('📊 Data range:', data[0]?.timestamp, 'to', data[data.length-1]?.timestamp);
+            
+            const ctx = document.getElementById('portfolio-chart').getContext('2d');
+            
+            // Properly destroy existing chart
+            if (portfolioChart) {
+                portfolioChart.destroy();
+                portfolioChart = null;
+            }
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            
+            // Log data for debugging
+            console.log('📊 Chart data count:', data.length);
+            console.log('📊 Chart data sample:', data.slice(0, 3));
+            console.log('📊 Chart data last 3:', data.slice(-3));
+            
+            try {
+                portfolioChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            label: 'Portfolio Value',
+                            data: data.map(log => ({
+                                x: new Date(log.timestamp),
+                                y: log.portfolio_value || log.portfolioValue
+                            })),
+                            borderColor: '#007bff',
+                            backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                            tension: 0.1,
+                            fill: true
+                        }]
+                    },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                displayFormats: (() => {
+                                    switch(timeframe) {
+                                        case '1D':
+                                            return {
+                                                hour: 'HH:mm',
+                                                day: 'MMM dd'
+                                            };
+                                        case '7D':
+                                            return {
+                                                day: 'MMM dd',
+                                                week: 'MMM dd'
+                                            };
+                                        case '1M':
+                                            return {
+                                                day: 'MMM dd',
+                                                week: 'MMM dd',
+                                                month: 'MMM yyyy'
+                                            };
+                                        default:
+                                            return {
+                                                hour: 'HH:mm',
+                                                day: 'MMM dd'
+                                            };
+                                    }
+                                })(),
+                                tooltipFormat: 'MMM dd HH:mm',
+                                unit: (() => {
+                                    switch(timeframe) {
+                                        case '1D': return 'hour';
+                                        case '7D': return 'day';
+                                        case '1M': return 'day';
+                                        default: return 'hour';
+                                    }
+                                })()
+                            },
+                            ticks: {
+                                maxRotation: 45,
+                                minRotation: 45,
+                                maxTicksLimit: (() => {
+                                    switch(timeframe) {
+                                        case '1D': return 12; // 12 hours max
+                                        case '7D': return 7;  // 7 days max
+                                        case '1M': return 15; // 15 days max
+                                        default: return 12;
+                                    }
+                                })()
+                            },
+                            // Set explicit time boundaries based on timeframe
+                            min: (() => {
+                                const now = new Date();
+                                switch(timeframe) {
+                                    case '1D': 
+                                        return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                                    case '7D': 
+                                        return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                                    case '1M': 
+                                        return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                                    default: 
+                                        return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                                }
+                            })(),
+                            max: new Date()
+                        },
+                        y: {
+                            beginAtZero: false,
+                            ticks: {
+                                callback: function(value) {
+                                    return formatCurrency(value);
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return 'Portfolio Value: ' + formatCurrency(context.parsed.y);
+                                }
+                            }
+                        }
+                    }
+                }
+                });
+                
+                console.log('📊 Chart updated successfully');
+            } catch (error) {
+                console.error('❌ Chart creation failed:', error);
+                // Show a simple fallback message
+                ctx.font = '16px Arial';
+                ctx.fillStyle = '#666';
+                ctx.fillText('Chart temporarily unavailable', 50, 50);
+            }
+        }
+
+        // Delta Donut Chart
+        let deltaDonutChart = null;
+        
+        function createDeltaDonutChart() {
+            const canvas = document.getElementById('delta-donut-chart');
+            if (!canvas) return;
+            
+            const ctx = canvas.getContext('2d');
+            
+            // Calculate portfolio delta using corrected formula
+            const deltaData = calculatePortfolioDelta();
+            const { netDelta, netDeltaPercent, grossExposure } = deltaData;
+            
+            // Update delta display
+            document.getElementById('delta-value').textContent = formatCurrency(netDelta);
+            document.getElementById('delta-percentage').textContent = `${Math.abs(netDeltaPercent).toFixed(1)}%`;
+            
+            // Create cursor-style gauge chart
+            if (deltaDonutChart) {
+                deltaDonutChart.destroy();
+            }
+
+            // Calculate needle rotation (-90 to +90 degrees based on delta percentage)
+            // -100% delta = -90 degrees (full left), +100% delta = +90 degrees (full right)
+            const maxDeltaPercent = 50; // Maximum delta percentage to show on gauge
+            const rotation = Math.max(-90, Math.min(90, (netDeltaPercent / maxDeltaPercent) * 90));
+
+            // Draw the gauge background
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw the gauge arc (semicircle)
+            ctx.beginPath();
+            ctx.arc(canvas.width/2, canvas.height/2, 45, Math.PI, 0, false);
+            ctx.lineWidth = 8;
+            ctx.strokeStyle = 'rgba(226, 232, 240, 0.8)';
+            ctx.stroke();
+
+            // Draw tick marks
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(148, 163, 184, 0.6)';
+            for (let i = 0; i <= 10; i++) {
+                const angle = Math.PI + (i / 10) * Math.PI;
+                const x1 = canvas.width/2 + Math.cos(angle) * 35;
+                const y1 = canvas.height/2 + Math.sin(angle) * 35;
+                const x2 = canvas.width/2 + Math.cos(angle) * 42;
+                const y2 = canvas.height/2 + Math.sin(angle) * 42;
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+            }
+
+            // Draw center circle
+            ctx.beginPath();
+            ctx.arc(canvas.width/2, canvas.height/2, 6, 0, 2 * Math.PI);
+            ctx.fillStyle = 'rgba(102, 126, 234, 0.9)';
+            ctx.fill();
+
+            // Draw needle
+            const needleAngle = Math.PI + (rotation / 180) * Math.PI;
+            const needleLength = 35;
+            
+            ctx.beginPath();
+            ctx.moveTo(canvas.width/2, canvas.height/2);
+            ctx.lineTo(
+                canvas.width/2 + Math.cos(needleAngle) * needleLength,
+                canvas.height/2 + Math.sin(needleAngle) * needleLength
+            );
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(102, 126, 234, 0.9)';
+            ctx.stroke();
+
+            // Add needle tip
+            ctx.beginPath();
+            ctx.arc(
+                canvas.width/2 + Math.cos(needleAngle) * needleLength,
+                canvas.height/2 + Math.sin(needleAngle) * needleLength,
+                3, 0, 2 * Math.PI
+            );
+            ctx.fillStyle = 'rgba(102, 126, 234, 0.9)';
+            ctx.fill();
+        }
+        
+        function calculatePortfolioDelta() {
+            if (!currentSnapshot.positions) return { netDelta: 0, netDeltaPercent: 0, grossExposure: 0 };
+            
+            let totalLongNotional = 0;
+            let totalShortNotional = 0;
+            let totalNotional = 0;
+            
+            currentSnapshot.positions.forEach(position => {
+                const notional = parseFloat(position.target_notional);
+                const contracts = parseFloat(position.target_contracts);
+                
+                if (notional && contracts) {
+                    totalNotional += Math.abs(notional);
+                    
+                    if (contracts > 0) {
+                        // Long position
+                        totalLongNotional += Math.abs(notional);
+                    } else {
+                        // Short position
+                        totalShortNotional += Math.abs(notional);
+                    }
+                }
+            });
+            
+            const netDelta = totalLongNotional - totalShortNotional;
+            const netDeltaPercent = totalNotional > 0 ? (netDelta / totalNotional) * 100 : 0;
+            
+            return {
+                netDelta,
+                netDeltaPercent,
+                grossExposure: totalNotional,
+                totalLongNotional,
+                totalShortNotional
+            };
+        }
+        
+        // Top Performers
+        function updateTopPerformers() {
+            if (!currentSnapshot.positions || !currentSnapshot.currentPrices || !currentSnapshot.baselinePrices) return;
+            
+            const positions = currentSnapshot.positions.map(position => {
+                const symbol = (position.ticker || position.ric || position.internal_code).replace('_', '');
+                const currentPrice = currentSnapshot.currentPrices[symbol];
+                const baselinePrice = currentSnapshot.baselinePrices[symbol];
+                const notional = parseFloat(position.target_notional);
+                const contracts = parseFloat(position.target_contracts);
+                
+                if (currentPrice && baselinePrice && notional && contracts) {
+                    const sideMultiplier = contracts > 0 ? 1 : -1;
+                    const pnl = sideMultiplier * (currentPrice - baselinePrice) / baselinePrice * Math.abs(notional);
+                    return {
+                        ...position,
+                        symbol: position.ticker || position.ric || position.internal_code,
+                        pnl,
+                        side: contracts > 0 ? 'LONG' : 'SHORT'
+                    };
+                }
+                return null;
+            }).filter(p => p !== null);
+            
+            // Separate longs and shorts
+            const longs = positions.filter(p => p.side === 'LONG').sort((a, b) => b.pnl - a.pnl);
+            const shorts = positions.filter(p => p.side === 'SHORT').sort((a, b) => b.pnl - a.pnl);
+            
+            // Update top 3 for each
+            updateTopPerformersList('top-long-performers', longs.slice(0, 3));
+            updateTopPerformersList('top-short-performers', shorts.slice(0, 3));
+        }
+        
+        function updateTopPerformersList(containerId, performers) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            
+            container.innerHTML = '';
+            
+            if (performers.length === 0) {
+                container.innerHTML = '<div class="loading">No data available</div>';
+                return;
+            }
+            
+            performers.forEach((performer, index) => {
+                const item = document.createElement('div');
+                item.className = 'top-performer-item';
+                item.innerHTML = `
+                    <span class="top-performer-rank">${index + 1}</span>
+                    <span class="top-performer-symbol symbol" data-symbol="${performer.symbol}">${performer.symbol}</span>
+                    <span class="top-performer-pnl ${performer.pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(performer.pnl)}</span>
+                `;
+                container.appendChild(item);
+            });
+        }
+        
+        // Check if position is in top 3 performers
+        function checkIfTopPerformer(symbol, pnl, side) {
+            if (!currentSnapshot.positions || !currentSnapshot.currentPrices || !currentSnapshot.baselinePrices) return false;
+            
+            // Get all positions with their P&L
+            const allPositions = currentSnapshot.positions.map(position => {
+                const posSymbol = (position.ticker || position.ric || position.internal_code).replace('_', '');
+                const currentPrice = currentSnapshot.currentPrices[posSymbol];
+                const baselinePrice = currentSnapshot.baselinePrices[posSymbol];
+                const notional = parseFloat(position.target_notional);
+                const contracts = parseFloat(position.target_contracts);
+                
+                if (currentPrice && baselinePrice && notional && contracts) {
+                    const sideMultiplier = contracts > 0 ? 1 : -1;
+                    const posPnl = sideMultiplier * (currentPrice - baselinePrice) / baselinePrice * Math.abs(notional);
+                    const posSide = contracts > 0 ? 'LONG' : 'SHORT';
+                    return { symbol: posSymbol, pnl: posPnl, side: posSide };
+                }
+                return null;
+            }).filter(p => p !== null);
+            
+            // Filter by side and sort by absolute P&L
+            const sameSidePositions = allPositions.filter(p => p.side === side);
+            const top3 = sameSidePositions.sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl)).slice(0, 3);
+            
+            return top3.some(top => top.symbol === symbol);
+        }
+
+        // Utility functions
+        function formatCurrency(value) {
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+        }
+
+        function formatPercentage(value) {
+            return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+        }
+
+        // Check for new CSV periodically
+        async function checkForNewCSV() {
+            const csvChanged = await loadDailyCSV();
+            if (csvChanged) {
+                console.log('🔄 New CSV detected - creating fresh snapshot');
+                await createSnapshot();
+            }
+        }
+
+        // Initialize
+        updateTime();
+        setInterval(updateTime, 1000);
+        
+        // Load historical PV data from S3 first
+        loadHistoricalPVData('1D').then(historicalData => {
+            console.log(`📊 Loaded ${historicalData.length} historical PV points from S3`);
+            console.log('📊 S3 Data:', historicalData);
+            pvLogs = historicalData;
+            updateChart(historicalData, '1D'); // Pass the data directly to show full chart
+        }).catch(error => {
+            console.error('Error loading historical data:', error);
+            console.log('📊 Initializing chart with empty data');
+            pvLogs = [];
+            updateChart(); // This will show the placeholder chart
+        });
+        
+        // Load daily CSV first
+        loadDailyCSV().then(() => {
+            // Create initial snapshot
+            createSnapshot();
+            
+            // Update positions and P&L every 10 seconds (tick by tick) - faster for testing
+            setInterval(createSnapshot, 10 * 1000);
+            
+            // Check for new CSV every 10 minutes (around execution time)
+            setInterval(checkForNewCSV, 10 * 60 * 1000);
+            
+            // Update chart every 5 minutes with fresh S3 data
+            setInterval(updateChartFromS3, 5 * 60 * 1000);
+        });
+        // CSV info toggle function
+        function toggleCSVInfo() {
+            const filename = document.getElementById('csv-filename');
+            if (filename.style.display === 'none') {
+                filename.style.display = 'inline';
+            } else {
+                filename.style.display = 'none';
+            }
+        }
+        
+        // Update CSV filename when data loads
+        function updateCSVFilename(filename) {
+            const csvElement = document.getElementById('csv-filename');
+            if (csvElement) {
+                csvElement.textContent = filename || 'No CSV loaded';
+            }
+        }
+        
+        // Update chart from S3 data every 5 minutes
+        async function updateChartFromS3() {
+            console.log('🔄 Updating chart from S3 data...');
+            try {
+                const response = await fetch('/signal-dashboard/data/portfolio_value_log.jsonl');
+                if (response.ok) {
+                    const text = await response.text();
+                    const lines = text.trim().split('\n').filter(line => line.trim());
+                    const s3Data = lines.map(line => JSON.parse(line));
+                    
+                    // Update pvLogs with fresh S3 data
+                    pvLogs = s3Data;
+                    
+                    // Update chart with current timeframe only if data has changed
+                    const activeButton = document.querySelector('.time-button.active');
+                    const timeframe = activeButton ? activeButton.textContent : '1D';
+                    updateChart(s3Data, timeframe);
+                    
+                    console.log(`📊 Chart updated with ${s3Data.length} data points from S3`);
+                } else {
+                    console.log('⚠️ No S3 data available yet, keeping current chart');
+                    // Don't update chart if S3 data is not available, keep current data
+                }
+            } catch (error) {
+                console.error('Error updating chart from S3:', error);
+                console.log('📊 Keeping current chart data due to error');
+                // Don't update chart on error, keep current data
+            }
+        }
+    </script>
+    
+    <style>
+        .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .csv-info { cursor: pointer; padding: 0.25rem 0.5rem; border-radius: 4px; transition: background-color 0.2s; }
+        .csv-info:hover { background-color: #f8f9fa; }
+        .csv-indicator { font-size: 1.2rem; margin-right: 0.5rem; }
+        .csv-filename { font-size: 0.85rem; color: #6c757d; font-family: monospace; }
+        .refresh-button {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-left: 10px;
+        }
+        .refresh-button:hover {
+            background-color: #218838;
+        }
+    </style>
+</body>
+</html>

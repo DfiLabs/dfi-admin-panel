@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DFI Labs - Admin Panel</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            padding: 3rem;
+            max-width: 800px;
+            width: 90%;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+        .logo {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            color: #6c757d;
+            font-size: 1.1rem;
+        }
+        .modules {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+        .module-card {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+        .module-card:hover {
+            transform: translateY(-5px);
+            border-color: #667eea;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.2);
+        }
+        .module-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+        .module-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 0.5rem;
+        }
+        .module-description {
+            color: #6c757d;
+            margin-bottom: 1.5rem;
+            line-height: 1.6;
+        }
+        .module-button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.75rem 2rem;
+            border-radius: 25px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .module-button:hover {
+            background: #5a6fd8;
+            transform: translateY(-2px);
+        }
+        .status {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin-bottom: 1rem;
+        }
+        .status.active {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.coming-soon {
+            background: #fff3cd;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">DFI Labs</div>
+            <div class="subtitle">Admin Panel</div>
+        </div>
+        
+        <div class="modules">
+            <div class="module-card">
+                <div class="module-icon">📊</div>
+                <div class="status active">Active</div>
+                <div class="module-title">Signal Dashboard</div>
+                <div class="module-description">
+                    Real-time monitoring of market-neutral positions across 29 cryptocurrency pairs. 
+                    Track portfolio performance, P&L, and position analytics.
+                </div>
+                <a href="modules/signal-dashboard/dashboard.html" class="module-button">Access Dashboard</a>
+            </div>
+            
+            <div class="module-card">
+                <div class="module-icon">📋</div>
+                <div class="status active">Active</div>
+                <div class="module-title">Factsheet</div>
+                <div class="module-description">
+                    Generate and manage investment factsheets. 
+                    Create professional PDF reports and documentation.
+                </div>
+                <a href="modules/factsheet/" class="module-button">Access Factsheet</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
