@@ -45,11 +45,17 @@
                             <span class="delta-value" id="delta-value">Loading...</span>
                         </div>
                     </div>
-                    <div class="donut-container">
-                        <canvas id="delta-donut-chart" width="120" height="120"></canvas>
-                        <div class="donut-center">
-                            <div class="donut-percentage" id="delta-percentage">0%</div>
-                            <div class="donut-label">DELTA</div>
+                    <div class="delta-progress-container">
+                        <div class="delta-progress-bar">
+                            <div class="delta-progress-fill" id="delta-progress-fill"></div>
+                            <div class="delta-progress-indicator" id="delta-progress-indicator"></div>
+                        </div>
+                        <div class="delta-progress-labels">
+                            <span class="delta-label-left">SHORT</span>
+                            <span class="delta-label-right">LONG</span>
+                        </div>
+                        <div class="delta-progress-value">
+                            <span id="delta-percentage">0%</span>
                         </div>
                     </div>
                 </div>
@@ -68,17 +74,21 @@
                     <div class="percentage" id="daily-pnl-percent"></div>
                 </div>
                 <div class="card">
-                    <h3>Total P&L Since Reset</h3>
+                    <h3>Total P&L Since Inception</h3>
                     <div class="value" id="total-pnl">Loading...</div>
                     <div class="percentage" id="total-pnl-percent"></div>
                 </div>
-                <div class="card">
-                    <h3>Total Notional at Entry</h3>
-                    <div class="value" id="total-notional">$1,000,000.00</div>
+                <div class="card long-position">
+                    <h3>Long Positions</h3>
+                    <div class="value" id="long-notional">Loading...</div>
+                    <div class="percentage" id="long-pnl-percent"></div>
+                    <div class="subtitle" id="long-count">0 positions</div>
                 </div>
-                <div class="card">
-                    <h3>Positions</h3>
-                    <div class="value" id="positions-count">Loading...</div>
+                <div class="card short-position">
+                    <h3>Short Positions</h3>
+                    <div class="value" id="short-notional">Loading...</div>
+                    <div class="percentage" id="short-pnl-percent"></div>
+                    <div class="subtitle" id="short-count">0 positions</div>
                 </div>
             </div>
 
@@ -95,7 +105,13 @@
                     <button class="time-button active" onclick="loadChartData('1D')">1D</button>
                     <button class="time-button" onclick="loadChartData('7D')">7D</button>
                     <button class="time-button" onclick="loadChartData('1M')">1M</button>
-                    <button class="refresh-button" onclick="createSnapshot()" title="Force Update Now">🔄</button>
+                    <button class="refresh-button" onclick="createSnapshot()" title="Force Update Now">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="23 4 23 10 17 10"></polyline>
+                            <polyline points="1 20 1 14 7 14"></polyline>
+                            <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path>
+                        </svg>
+                    </button>
                 </div>
                 <div class="chart-container">
                     <canvas id="portfolio-chart"></canvas>
@@ -401,11 +417,23 @@
             document.getElementById('total-pnl-percent').textContent = `(${formatPercentage((totalPnL / initialCapital) * 100)})`;
             document.getElementById('total-pnl-percent').className = `percentage ${totalPnL >= 0 ? 'positive' : 'negative'}`;
             
-            // Positions count
-            document.getElementById('positions-count').textContent = snapshot.positions.length;
+            // Calculate Long/Short metrics
+            const longShortMetrics = calculateLongShortMetrics(snapshot.positions);
             
-            // Update delta donut chart
-            createDeltaDonutChart();
+            // Long Positions
+            document.getElementById('long-notional').textContent = formatCurrency(longShortMetrics.longNotional);
+            document.getElementById('long-pnl-percent').textContent = `(${formatCurrency(longShortMetrics.longPnL)})`;
+            document.getElementById('long-pnl-percent').className = `percentage ${longShortMetrics.longPnL >= 0 ? 'positive' : 'negative'}`;
+            document.getElementById('long-count').textContent = `${longShortMetrics.longCount} positions`;
+            
+            // Short Positions
+            document.getElementById('short-notional').textContent = formatCurrency(longShortMetrics.shortNotional);
+            document.getElementById('short-pnl-percent').textContent = `(${formatCurrency(longShortMetrics.shortPnL)})`;
+            document.getElementById('short-pnl-percent').className = `percentage ${longShortMetrics.shortPnL >= 0 ? 'positive' : 'negative'}`;
+            document.getElementById('short-count').textContent = `${longShortMetrics.shortCount} positions`;
+            
+            // Update delta progress bar
+            createDeltaProgressBar();
             
             // Update top performers
             updateTopPerformers();
@@ -593,9 +621,6 @@
             }
             
             console.log(`📊 Updating chart with ${data.length} data points`);
-            console.log('📊 Chart data sample:', data.slice(0, 3));
-            console.log('📊 Full data length:', data.length);
-            console.log('📊 Data range:', data[0]?.timestamp, 'to', data[data.length-1]?.timestamp);
             
             const ctx = document.getElementById('portfolio-chart').getContext('2d');
             
@@ -608,123 +633,248 @@
             // Clear canvas
             ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
             
-            // Log data for debugging
-            console.log('📊 Chart data count:', data.length);
-            console.log('📊 Chart data sample:', data.slice(0, 3));
-            console.log('📊 Chart data last 3:', data.slice(-3));
-            
             try {
-                portfolioChart = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        datasets: [{
-                            label: 'Portfolio Value',
+                // Create beautiful gradients
+                const gradient = ctx.createLinearGradient(0, 0, 0, ctx.canvas.height);
+                gradient.addColorStop(0, 'rgba(102, 126, 234, 0.4)');
+                gradient.addColorStop(0.5, 'rgba(102, 126, 234, 0.15)');
+                gradient.addColorStop(1, 'rgba(102, 126, 234, 0.05)');
+
+                // Create border gradient
+                const borderGradient = ctx.createLinearGradient(0, 0, ctx.canvas.width, 0);
+                borderGradient.addColorStop(0, 'rgba(102, 126, 234, 1)');
+                borderGradient.addColorStop(0.5, 'rgba(118, 75, 162, 0.8)');
+                borderGradient.addColorStop(1, 'rgba(102, 126, 234, 1)');
+            
+            portfolioChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Portfolio Value',
                             data: data.map(log => ({
                                 x: new Date(log.timestamp),
                                 y: log.portfolio_value || log.portfolioValue
                             })),
-                            borderColor: '#007bff',
-                            backgroundColor: 'rgba(0, 123, 255, 0.1)',
-                            tension: 0.1,
-                            fill: true
-                        }]
-                    },
+                            borderColor: borderGradient,
+                            backgroundColor: gradient,
+                            borderWidth: 3,
+                            tension: 0.4,
+                            fill: true,
+                            pointRadius: 0,
+                            pointHoverRadius: 8,
+                            pointHoverBackgroundColor: 'rgba(255, 255, 255, 0.9)',
+                            pointHoverBorderColor: 'rgba(102, 126, 234, 1)',
+                            pointHoverBorderWidth: 3,
+                            pointBackgroundColor: 'rgba(102, 126, 234, 0.8)',
+                            pointBorderColor: 'rgba(255, 255, 255, 1)',
+                            pointBorderWidth: 2,
+                            shadowOffsetX: 0,
+                            shadowOffsetY: 4,
+                            shadowBlur: 12,
+                            shadowColor: 'rgba(102, 126, 234, 0.3)'
+                    }]
+                },
                 options: {
                     responsive: true,
-                    scales: {
-                        x: {
-                            type: 'time',
-                            time: {
-                                displayFormats: (() => {
-                                    switch(timeframe) {
-                                        case '1D':
-                                            return {
-                                                hour: 'HH:mm',
-                                                day: 'MMM dd'
-                                            };
-                                        case '7D':
-                                            return {
-                                                day: 'MMM dd',
-                                                week: 'MMM dd'
-                                            };
-                                        case '1M':
-                                            return {
-                                                day: 'MMM dd',
-                                                week: 'MMM dd',
-                                                month: 'MMM yyyy'
-                                            };
-                                        default:
-                                            return {
-                                                hour: 'HH:mm',
-                                                day: 'MMM dd'
-                                            };
-                                    }
-                                })(),
-                                tooltipFormat: 'MMM dd HH:mm',
-                                unit: (() => {
-                                    switch(timeframe) {
-                                        case '1D': return 'hour';
-                                        case '7D': return 'day';
-                                        case '1M': return 'day';
-                                        default: return 'hour';
-                                    }
-                                })()
-                            },
-                            ticks: {
-                                maxRotation: 45,
-                                minRotation: 45,
-                                maxTicksLimit: (() => {
-                                    switch(timeframe) {
-                                        case '1D': return 12; // 12 hours max
-                                        case '7D': return 7;  // 7 days max
-                                        case '1M': return 15; // 15 days max
-                                        default: return 12;
-                                    }
-                                })()
-                            },
-                            // Set explicit time boundaries based on timeframe
-                            min: (() => {
-                                const now = new Date();
-                                switch(timeframe) {
-                                    case '1D': 
-                                        return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-                                    case '7D': 
-                                        return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-                                    case '1M': 
-                                        return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-                                    default: 
-                                        return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                labels: {
+                                    usePointStyle: true,
+                                    pointStyle: 'circle',
+                                    padding: 20,
+                                    font: {
+                                        family: '-apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif',
+                                        size: 13,
+                                        weight: '600'
+                                    },
+                                    color: '#374151',
+                                    boxWidth: 12,
+                                    boxHeight: 12
                                 }
-                            })(),
-                            max: new Date()
-                        },
-                        y: {
-                            beginAtZero: false,
-                            ticks: {
-                                callback: function(value) {
-                                    return formatCurrency(value);
+                            },
+                            tooltip: {
+                                enabled: true,
+                                backgroundColor: 'rgba(255, 255, 255, 0.98)',
+                                titleColor: '#1f2937',
+                                bodyColor: '#4b5563',
+                                borderColor: 'rgba(102, 126, 234, 0.2)',
+                                borderWidth: 1,
+                                cornerRadius: 12,
+                                displayColors: false,
+                                titleFont: {
+                                    family: '-apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif',
+                                    size: 13,
+                                    weight: '600'
+                                },
+                                bodyFont: {
+                                    family: '-apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif',
+                                    size: 12,
+                                    weight: '500'
+                                },
+                                padding: 12,
+                                caretSize: 6,
+                                caretPadding: 8,
+                                callbacks: {
+                                    title: function(context) {
+                                        const date = new Date(context[0].label);
+                                        return date.toLocaleString('en-US', {
+                                            weekday: 'short',
+                                            month: 'short',
+                                            day: 'numeric',
+                                            hour: '2-digit',
+                                            minute: '2-digit'
+                                        });
+                                    },
+                                    label: function(context) {
+                                        return `Portfolio: ${formatCurrency(context.parsed.y)}`;
+                                    }
                                 }
                             }
-                        }
-                    },
-                    plugins: {
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return 'Portfolio Value: ' + formatCurrency(context.parsed.y);
+                        },
+                    scales: {
+                            x: {
+                                type: 'time',
+                                time: {
+                                    displayFormats: (() => {
+                                        switch(timeframe) {
+                                            case '1D':
+                                                return {
+                                                    hour: 'HH:mm',
+                                                    day: 'MMM dd'
+                                                };
+                                            case '7D':
+                                                return {
+                                                    day: 'MMM dd',
+                                                    week: 'MMM dd'
+                                                };
+                                            case '1M':
+                                                return {
+                                                    day: 'MMM dd',
+                                                    week: 'MMM dd',
+                                                    month: 'MMM yyyy'
+                                                };
+                                            default:
+                                                return {
+                                                    hour: 'HH:mm',
+                                                    day: 'MMM dd'
+                                                };
+                                        }
+                                    })(),
+                                    tooltipFormat: 'MMM dd HH:mm',
+                                    unit: (() => {
+                                        switch(timeframe) {
+                                            case '1D': return 'hour';
+                                            case '7D': return 'day';
+                                            case '1M': return 'day';
+                                            default: return 'hour';
+                                        }
+                                    })()
+                                },
+                                grid: {
+                                    display: true,
+                                    color: 'rgba(226, 232, 240, 0.6)',
+                                    lineWidth: 1,
+                                    drawBorder: false
+                                },
+                                ticks: {
+                                    color: '#6b7280',
+                                    font: {
+                                        family: '-apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif',
+                                        size: 11,
+                                        weight: '500'
+                                    },
+                                    maxRotation: 45,
+                                    minRotation: 0,
+                                    padding: 8,
+                                    maxTicksLimit: (() => {
+                                        switch(timeframe) {
+                                            case '1D': return 12;
+                                            case '7D': return 7;
+                                            case '1M': return 15;
+                                            default: return 12;
+                                        }
+                                    })()
+                                },
+                                // Set explicit time boundaries based on timeframe
+                                min: (() => {
+                                    const now = new Date();
+                                    switch(timeframe) {
+                                        case '1D': 
+                                            return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                                        case '7D': 
+                                            return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                                        case '1M': 
+                                            return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                                        default: 
+                                            return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                                    }
+                                })(),
+                                max: new Date(),
+                                border: {
+                                    display: false
                                 }
+                            },
+                        y: {
+                            beginAtZero: false,
+                                grid: {
+                                    display: true,
+                                    color: 'rgba(226, 232, 240, 0.6)',
+                                    lineWidth: 1,
+                                    drawBorder: false
+                                },
+                            ticks: {
+                                    color: '#6b7280',
+                                    font: {
+                                        family: '-apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif',
+                                        size: 11,
+                                        weight: '500',
+                                        variant: 'tabular-nums'
+                                    },
+                                    padding: 12,
+                                callback: function(value) {
+                                    return formatCurrency(value);
+                                    }
+                                },
+                                border: {
+                                    display: false
+                                }
+                            }
+                        },
+                        interaction: {
+                            intersect: false,
+                            mode: 'index'
+                        },
+                        animation: {
+                            duration: 1500,
+                            easing: 'easeInOutQuart',
+                            delay: (context) => {
+                                let delay = 0;
+                                if (context.type === 'data' && context.mode === 'default') {
+                                    delay = context.dataIndex * 50;
+                                }
+                                return delay;
+                            }
+                        },
+                        elements: {
+                            line: {
+                                shadowOffsetX: 0,
+                                shadowOffsetY: 4,
+                                shadowBlur: 12,
+                                shadowColor: 'rgba(102, 126, 234, 0.3)'
                             }
                         }
                     }
-                }
                 });
                 
-                console.log('📊 Chart updated successfully');
+                console.log('📊 Beautiful chart updated successfully');
             } catch (error) {
                 console.error('❌ Chart creation failed:', error);
-                // Show a simple fallback message
-                ctx.font = '16px Arial';
-                ctx.fillStyle = '#666';
+                // Show a beautiful fallback message
+                ctx.font = '16px -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif';
+                ctx.fillStyle = '#6b7280';
                 ctx.fillText('Chart temporarily unavailable', 50, 50);
             }
         }
@@ -732,12 +882,7 @@
         // Delta Donut Chart
         let deltaDonutChart = null;
         
-        function createDeltaDonutChart() {
-            const canvas = document.getElementById('delta-donut-chart');
-            if (!canvas) return;
-            
-            const ctx = canvas.getContext('2d');
-            
+        function createDeltaProgressBar() {
             // Calculate portfolio delta using corrected formula
             const deltaData = calculatePortfolioDelta();
             const { netDelta, netDeltaPercent, grossExposure } = deltaData;
@@ -746,70 +891,28 @@
             document.getElementById('delta-value').textContent = formatCurrency(netDelta);
             document.getElementById('delta-percentage').textContent = `${Math.abs(netDeltaPercent).toFixed(1)}%`;
             
-            // Create cursor-style gauge chart
-            if (deltaDonutChart) {
-                deltaDonutChart.destroy();
-            }
-
-            // Calculate needle rotation (-90 to +90 degrees based on delta percentage)
-            // -100% delta = -90 degrees (full left), +100% delta = +90 degrees (full right)
-            const maxDeltaPercent = 50; // Maximum delta percentage to show on gauge
-            const rotation = Math.max(-90, Math.min(90, (netDeltaPercent / maxDeltaPercent) * 90));
-
-            // Draw the gauge background
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Calculate progress bar position (0-100%)
+            // Convert -50% to +50% delta range to 0-100% progress bar
+            const normalizedDelta = Math.max(-50, Math.min(50, netDeltaPercent));
+            const progressPosition = ((normalizedDelta + 50) / 100) * 100; // 0-100%
             
-            // Draw the gauge arc (semicircle)
-            ctx.beginPath();
-            ctx.arc(canvas.width/2, canvas.height/2, 45, Math.PI, 0, false);
-            ctx.lineWidth = 8;
-            ctx.strokeStyle = 'rgba(226, 232, 240, 0.8)';
-            ctx.stroke();
-
-            // Draw tick marks
-            ctx.lineWidth = 2;
-            ctx.strokeStyle = 'rgba(148, 163, 184, 0.6)';
-            for (let i = 0; i <= 10; i++) {
-                const angle = Math.PI + (i / 10) * Math.PI;
-                const x1 = canvas.width/2 + Math.cos(angle) * 35;
-                const y1 = canvas.height/2 + Math.sin(angle) * 35;
-                const x2 = canvas.width/2 + Math.cos(angle) * 42;
-                const y2 = canvas.height/2 + Math.sin(angle) * 42;
-                ctx.beginPath();
-                ctx.moveTo(x1, y1);
-                ctx.lineTo(x2, y2);
-                ctx.stroke();
-            }
-
-            // Draw center circle
-            ctx.beginPath();
-            ctx.arc(canvas.width/2, canvas.height/2, 6, 0, 2 * Math.PI);
-            ctx.fillStyle = 'rgba(102, 126, 234, 0.9)';
-            ctx.fill();
-
-            // Draw needle
-            const needleAngle = Math.PI + (rotation / 180) * Math.PI;
-            const needleLength = 35;
+            // Update progress bar fill
+            const progressFill = document.getElementById('delta-progress-fill');
+            const progressIndicator = document.getElementById('delta-progress-indicator');
             
-            ctx.beginPath();
-            ctx.moveTo(canvas.width/2, canvas.height/2);
-            ctx.lineTo(
-                canvas.width/2 + Math.cos(needleAngle) * needleLength,
-                canvas.height/2 + Math.sin(needleAngle) * needleLength
-            );
-            ctx.lineWidth = 3;
-            ctx.strokeStyle = 'rgba(102, 126, 234, 0.9)';
-            ctx.stroke();
-
-            // Add needle tip
-            ctx.beginPath();
-            ctx.arc(
-                canvas.width/2 + Math.cos(needleAngle) * needleLength,
-                canvas.height/2 + Math.sin(needleAngle) * needleLength,
-                3, 0, 2 * Math.PI
-            );
-            ctx.fillStyle = 'rgba(102, 126, 234, 0.9)';
-            ctx.fill();
+            // Set fill width based on long/short balance
+            const longPercentage = (deltaData.totalLongNotional / grossExposure) * 100;
+            const shortPercentage = (deltaData.totalShortNotional / grossExposure) * 100;
+            
+            // Progress bar shows long exposure (from left)
+            progressFill.style.width = `${longPercentage}%`;
+            progressFill.style.backgroundColor = netDeltaPercent >= 0 ? 
+                'rgba(102, 126, 234, 0.3)' : 'rgba(239, 68, 68, 0.3)';
+            
+            // Indicator shows net delta position
+            progressIndicator.style.left = `${progressPosition}%`;
+            progressIndicator.style.backgroundColor = netDeltaPercent >= 0 ? 
+                'rgba(102, 126, 234, 1)' : 'rgba(239, 68, 68, 1)';
         }
         
         function calculatePortfolioDelta() {
@@ -845,6 +948,54 @@
                 grossExposure: totalNotional,
                 totalLongNotional,
                 totalShortNotional
+            };
+        }
+        
+        function calculateLongShortMetrics(positions) {
+            if (!positions) return { 
+                longNotional: 0, longPnL: 0, longCount: 0,
+                shortNotional: 0, shortPnL: 0, shortCount: 0 
+            };
+            
+            let longNotional = 0;
+            let longPnL = 0;
+            let longCount = 0;
+            let shortNotional = 0;
+            let shortPnL = 0;
+            let shortCount = 0;
+            
+            positions.forEach(position => {
+                const notional = parseFloat(position.target_notional);
+                const contracts = parseFloat(position.target_contracts);
+                const entryPrice = parseFloat(position.ref_price);
+                const currentPrice = parseFloat(position.current_price);
+                
+                if (notional && contracts && entryPrice && currentPrice) {
+                    // Calculate P&L for this position
+                    const sideMultiplier = contracts > 0 ? 1 : -1; // 1 for long, -1 for short
+                    const pnl = (currentPrice - entryPrice) * Math.abs(contracts) * sideMultiplier;
+                    
+                    if (contracts > 0) {
+                        // Long position
+                        longNotional += Math.abs(notional);
+                        longPnL += pnl;
+                        longCount++;
+                    } else {
+                        // Short position
+                        shortNotional += Math.abs(notional);
+                        shortPnL += pnl;
+                        shortCount++;
+                    }
+                }
+            });
+            
+            return {
+                longNotional,
+                longPnL,
+                longCount,
+                shortNotional,
+                shortPnL,
+                shortCount
             };
         }
         
@@ -1037,17 +1188,38 @@
         .csv-indicator { font-size: 1.2rem; margin-right: 0.5rem; }
         .csv-filename { font-size: 0.85rem; color: #6c757d; font-family: monospace; }
         .refresh-button {
-            background-color: #28a745;
-            color: white;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 252, 0.9) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+            color: #64748b;
             border: none;
-            padding: 8px 12px;
-            border-radius: 4px;
+            padding: 10px 12px;
+            border-radius: 12px;
             cursor: pointer;
             font-size: 14px;
-            margin-left: 10px;
+            margin-left: 12px;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         .refresh-button:hover {
-            background-color: #218838;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 1) 0%, rgba(248, 250, 252, 1) 100%);
+            border-color: rgba(102, 126, 234, 0.3);
+            color: #475569;
+            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.12);
+            transform: translateY(-1px);
+        }
+        .refresh-button:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        .refresh-button svg {
+            transition: transform 0.3s ease;
+        }
+        .refresh-button:hover svg {
+            transform: rotate(180deg);
         }
     </style>
 </body>

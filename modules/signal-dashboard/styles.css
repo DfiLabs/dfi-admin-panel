@@ -193,19 +193,26 @@ body {
     padding: var(--space-2xl) 0;
 }
 
-/* Delta Cursor Chart - Technical Trading Style */
+/* Delta Gadget - Minimalist Tech Style */
 .delta-donut-section {
     margin-bottom: var(--space-xl);
 }
 
 .delta-donut-card {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 252, 0.9) 100%);
+    background: rgba(255, 255, 255, 0.6);
     backdrop-filter: blur(20px);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
+    border: 1px solid rgba(226, 232, 240, 0.4);
+    border-radius: 16px;
     padding: var(--space-lg);
-    box-shadow: var(--shadow-sm);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
     text-align: center;
+    transition: all 0.3s ease;
+}
+
+.delta-donut-card:hover {
+    background: rgba(255, 255, 255, 0.8);
+    border-color: rgba(102, 126, 234, 0.2);
+    box-shadow: 0 4px 20px rgba(102, 126, 234, 0.08);
 }
 
 .delta-header {
@@ -216,9 +223,11 @@ body {
 }
 
 .delta-header h3 {
-    font-size: 1rem;
-    font-weight: 500;
+    font-size: 0.9rem;
+    font-weight: 600;
     color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
 }
 
 .delta-status {
@@ -228,43 +237,84 @@ body {
 }
 
 .delta-label {
-    font-size: 0.7rem;
+    font-size: 0.65rem;
     color: var(--text-muted);
     font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 2px;
+}
+
+.delta-value {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Delta Progress Bar - Minimal & Clean */
+.delta-progress-container {
+    margin: var(--space-md) 0;
+}
+
+.delta-progress-bar {
+    position: relative;
+    width: 100%;
+    height: 8px;
+    background: rgba(226, 232, 240, 0.3);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: var(--space-sm);
+}
+
+.delta-progress-fill {
+    height: 100%;
+    background: rgba(102, 126, 234, 0.3);
+    border-radius: 4px;
+    transition: all 0.3s ease;
+    width: 0%;
+}
+
+.delta-progress-indicator {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 16px;
+    height: 16px;
+    background: rgba(102, 126, 234, 1);
+    border: 2px solid rgba(255, 255, 255, 1);
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+    transition: all 0.3s ease;
+}
+
+.delta-progress-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: var(--space-xs);
+}
+
+.delta-label-left,
+.delta-label-right {
+    font-size: 0.65rem;
+    font-weight: 500;
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
 
-.delta-value {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
-    font-variant-numeric: tabular-nums;
-}
-
-.donut-container {
-    position: relative;
-    display: inline-block;
-    width: 120px;
-    height: 120px;
-}
-
-.donut-center {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
+.delta-progress-value {
     text-align: center;
+    margin-top: var(--space-xs);
 }
 
-.donut-percentage {
-    font-size: 1.25rem;
-    font-weight: 600;
+.delta-progress-value span {
+    font-size: 1rem;
+    font-weight: 700;
     color: var(--text-primary);
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
     font-variant-numeric: tabular-nums;
-    line-height: 1;
 }
 
 /* Delta Cursor Needle */
@@ -387,6 +437,35 @@ body {
     border-color: rgba(102, 126, 234, 0.3);
 }
 
+/* Long/Short Position Cards */
+.card.long-position {
+    border-left: 4px solid rgba(34, 197, 94, 0.6);
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.05) 0%, rgba(34, 197, 94, 0.02) 100%);
+}
+
+.card.long-position::before {
+    background: linear-gradient(90deg, rgba(34, 197, 94, 0.8), rgba(34, 197, 94, 0.4));
+}
+
+.card.long-position:hover {
+    border-color: rgba(34, 197, 94, 0.3);
+    box-shadow: 0 8px 32px rgba(34, 197, 94, 0.15);
+}
+
+.card.short-position {
+    border-left: 4px solid rgba(239, 68, 68, 0.6);
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.05) 0%, rgba(239, 68, 68, 0.02) 100%);
+}
+
+.card.short-position::before {
+    background: linear-gradient(90deg, rgba(239, 68, 68, 0.8), rgba(239, 68, 68, 0.4));
+}
+
+.card.short-position:hover {
+    border-color: rgba(239, 68, 68, 0.3);
+    box-shadow: 0 8px 32px rgba(239, 68, 68, 0.15);
+}
+
 .card h3 {
     font-size: 0.875rem;
     font-weight: 600;
@@ -435,28 +514,143 @@ body {
     margin-top: var(--space-xs);
 }
 
-/* Chart Section */
+/* Chart Section - Beautiful Modern Design */
 .chart-section {
-    background: var(--bg-card);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.95) 100%);
     backdrop-filter: blur(20px);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: var(--space-xl);
+    border: 1px solid rgba(226, 232, 240, 0.8);
+    border-radius: 20px;
+    padding: var(--space-2xl);
     margin-bottom: var(--space-2xl);
-    box-shadow: var(--shadow-md);
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    position: relative;
+    overflow: hidden;
+}
+
+.chart-section::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--primary-color), var(--primary-dark), var(--primary-color));
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.chart-section:hover {
+    border-color: rgba(102, 126, 234, 0.3);
+    box-shadow: 0 8px 30px rgba(102, 126, 234, 0.15);
+    transform: translateY(-4px);
+}
+
+.chart-section:hover::before {
+    opacity: 1;
 }
 
 .chart-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: var(--space-lg);
+    margin-bottom: var(--space-xl);
 }
 
 .chart-header h2 {
-    font-size: 1.5rem;
-    font-weight: 600;
+    font-size: 1.75rem;
+    font-weight: 700;
     color: var(--text-primary);
+    margin: 0;
+    background: linear-gradient(135deg, var(--text-primary), var(--primary-color));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* Chart Controls */
+.chart-controls {
+    display: flex;
+    gap: var(--space-sm);
+    align-items: center;
+    background: rgba(255, 255, 255, 0.8);
+    padding: var(--space-xs);
+    border-radius: 12px;
+    border: 1px solid rgba(226, 232, 240, 0.6);
+    backdrop-filter: blur(10px);
+}
+
+.time-button {
+    padding: var(--space-sm) var(--space-lg);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+}
+
+.time-button::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.1), transparent);
+    transition: left 0.5s ease;
+}
+
+.time-button:hover::before {
+    left: 100%;
+}
+
+.time-button:hover {
+    border-color: rgba(102, 126, 234, 0.3);
+    color: var(--primary-color);
+    transform: translateY(-1px);
+}
+
+.time-button.active {
+    background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+    border-color: var(--primary-color);
+    color: white;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    transform: translateY(-1px);
+}
+
+.refresh-button {
+    padding: var(--space-sm);
+    border: none;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--success), #059669);
+    color: white;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 1rem;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+
+.refresh-button:hover {
+    background: linear-gradient(135deg, #059669, #047857);
+    transform: scale(1.05) rotate(180deg);
+    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.4);
+}
+
+.chart-container {
+    position: relative;
+    height: 450px;
+    width: 100%;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.8) 0%, rgba(248, 250, 252, 0.8) 100%);
+    border-radius: 16px;
+    padding: var(--space-lg);
+    border: 1px solid rgba(226, 232, 240, 0.6);
+    backdrop-filter: blur(10px);
 }
 
 .csv-info {
@@ -711,53 +905,111 @@ tr:hover td {
 }
 
 /* Top Performers Section - Modern Design */
+/* Top Performers - Beautiful Modern Design */
 .top-performers {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: var(--space-lg);
-    margin-bottom: var(--space-xl);
+    gap: var(--space-xl);
+    margin-bottom: var(--space-2xl);
 }
 
 .top-performers-card {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 252, 0.9) 100%);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.95) 100%);
     backdrop-filter: blur(20px);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    padding: var(--space-lg);
-    box-shadow: var(--shadow-sm);
+    border: 1px solid rgba(226, 232, 240, 0.8);
+    border-radius: 20px;
+    padding: var(--space-xl);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.top-performers-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--primary-color), var(--primary-dark));
+    opacity: 0.8;
+}
+
+.top-performers-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.12);
+    border-color: rgba(102, 126, 234, 0.2);
+}
+
+.top-performers-card.longs::before {
+    background: linear-gradient(90deg, rgba(34, 197, 94, 0.8), rgba(22, 163, 74, 0.8));
+}
+
+.top-performers-card.shorts::before {
+    background: linear-gradient(90deg, rgba(239, 68, 68, 0.8), rgba(220, 38, 38, 0.8));
 }
 
 .top-performers-card h4 {
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: var(--text-secondary);
-    margin-bottom: var(--space-md);
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: var(--space-lg);
     text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+    position: relative;
 }
 
 .top-performers-card.longs h4 {
-    color: var(--success);
+    background: linear-gradient(135deg, rgba(34, 197, 94, 1), rgba(22, 163, 74, 1));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
 
 .top-performers-card.shorts h4 {
-    color: var(--error);
+    background: linear-gradient(135deg, rgba(239, 68, 68, 1), rgba(220, 38, 38, 1));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
 
 .top-performer-item {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: var(--space-sm) var(--space-md);
-    margin-bottom: var(--space-xs);
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.8) 0%, rgba(248, 250, 252, 0.8) 100%);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-color);
-    transition: all 0.2s ease;
+    padding: var(--space-md) var(--space-lg);
+    margin-bottom: var(--space-sm);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 252, 0.9) 100%);
+    backdrop-filter: blur(10px);
+    border-radius: 16px;
+    border: 1px solid rgba(226, 232, 240, 0.6);
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.top-performer-item::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--primary-color), var(--primary-dark));
+    opacity: 0;
+    transition: opacity 0.3s ease;
 }
 
 .top-performer-item:hover {
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-sm);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+    border-color: rgba(102, 126, 234, 0.3);
+}
+
+.top-performer-item:hover::before {
+    opacity: 1;
 }
 
 .top-performer-item:last-child {
@@ -765,31 +1017,40 @@ tr:hover td {
 }
 
 .top-performer-rank {
-    font-size: 0.9rem;
-    font-weight: 700;
-    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 800;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
     font-variant-numeric: tabular-nums;
-    min-width: 25px;
+    min-width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: white;
+    border-radius: 50%;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    margin-right: var(--space-md);
 }
 
 .top-performer-symbol {
-    font-weight: 600;
+    font-weight: 700;
     color: var(--text-primary);
     flex: 1;
-    margin-left: var(--space-sm);
-    font-size: 0.9rem;
+    font-size: 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+    letter-spacing: 0.02em;
 }
 
 .top-performer-pnl {
-    font-weight: 600;
+    font-weight: 700;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
     font-variant-numeric: tabular-nums;
-    font-size: 0.9rem;
+    font-size: 1rem;
+    padding: var(--space-xs) var(--space-sm);
+    border-radius: 8px;
+    background: rgba(248, 250, 252, 0.8);
+    border: 1px solid rgba(226, 232, 240, 0.6);
 }
 
 .top-performer-pnl.positive {
