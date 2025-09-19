@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strategy Monitor</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+
+    <!-- Main Content -->
+    <main class="main">
+        <div class="container">
+            <!-- Landing Page -->
+            <div id="landing-page" class="page active">
+                <div class="hero">
+                    <h1>Strategy Monitor<br>In-house simple strategy tracking & monitoring</h1>
+                    <p>Monitor live positions, track performance, and analyze portfolio strategies with precision.</p>
+                    <button class="cta-button" onclick="showPage('strategy-selection')">Access Dashboard →</button>
+                </div>
+                
+                <div class="strategy-tiles">
+                    <div class="tile" onclick="window.location.href='dashboard.html'">
+                        <h3>Strategy Monitor</h3>
+                        <p>Live Dashboard</p>
+                        <span class="tile-subtitle">Real-time monitoring of market-neutral positions across 28 cryptocurrency pairs</span>
+                    </div>
+                    <div class="tile inactive" data-strategy="smartarb">
+                        <h3>SmartArb Monitor</h3>
+                        <p>Coming Soon</p>
+                        <span class="tile-subtitle">Delta-neutral strategy monitoring and basis capture tracking</span>
+                    </div>
+                    <div class="tile inactive" data-strategy="vision">
+                        <h3>Vision Monitor</h3>
+                        <p>Coming Soon</p>
+                        <span class="tile-subtitle">Directional strategy monitoring with dynamic hedging analysis</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Strategy Selection Page -->
+            <div id="strategy-selection" class="page">
+                <div class="strategy-selection-header">
+                    <h2>Select Strategy to Monitor</h2>
+                    <p>Choose which strategy you want to monitor and analyze</p>
+                </div>
+                
+                <div class="strategy-tiles">
+                    <div class="tile active" onclick="window.location.href='dashboard.html'">
+                        <h3>Strategy Monitor</h3>
+                        <p>Live Dashboard</p>
+                        <span class="tile-subtitle">Real-time monitoring of market-neutral positions across 28 cryptocurrency pairs</span>
+                        <div class="tile-status">Active</div>
+                    </div>
+                    <div class="tile inactive" data-strategy="smartarb">
+                        <h3>SmartArb Monitor</h3>
+                        <p>Coming Soon</p>
+                        <span class="tile-subtitle">Delta-neutral strategy monitoring and basis capture tracking</span>
+                        <div class="tile-status">In Development</div>
+                    </div>
+                    <div class="tile inactive" data-strategy="vision">
+                        <h3>Vision Monitor</h3>
+                        <p>Coming Soon</p>
+                        <span class="tile-subtitle">Directional strategy monitoring with dynamic hedging analysis</span>
+                        <div class="tile-status">In Development</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Descartes Dashboard -->
+            <div id="descartes-dashboard" class="page">
+                <div class="dashboard-header">
+                    <h2>Descartes Strategy Monitor</h2>
+                    <div class="dashboard-info">
+                        <div class="timestamp">
+                            <span id="current-time"></span>
+                            <span class="latency-badge" id="latency-badge">Latency: <span id="latency-value">0ms</span></span>
+                        </div>
+                        <div class="nominal-info">
+                            <span>Reference Capital: $1,000,000</span>
+                            <span class="update-indicator">Live updates via Binance API</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Portfolio Balance & P&L -->
+                <div class="kpis">
+                    <div class="kpi-card portfolio-balance">
+                        <h4>Current Portfolio Value</h4>
+                        <div class="kpi-value" id="portfolio-value">$1,023,450</div>
+                        <div class="kpi-subtitle">(Live value based on current market prices)</div>
+                    </div>
+                    <div class="kpi-card pnl-card">
+                        <h4>Today's P&L</h4>
+                        <div class="kpi-value positive" id="daily-pnl">+$23,450</div>
+                        <div class="kpi-subtitle">(Unrealized gain/loss since position entry)</div>
+                    </div>
+                    <div class="kpi-card pnl-percentage">
+                        <h4>P&L %</h4>
+                        <div class="kpi-value positive" id="pnl-percentage">+2.35%</div>
+                        <div class="kpi-subtitle">(Percentage return on allocated capital)</div>
+                    </div>
+                    <div class="kpi-card">
+                        <h4>Data Freshness</h4>
+                        <div class="kpi-value" id="freshness">94.2%</div>
+                        <div class="kpi-subtitle">(Rolling window: % on-time days, avg/P95 latency)</div>
+                    </div>
+                </div>
+
+                <!-- Portfolio Table -->
+                <div class="portfolio-section">
+                    <h3>Live Portfolio Positions</h3>
+                    <div class="portfolio-chart">
+                        <canvas id="weight-chart"></canvas>
+                    </div>
+                    <div class="portfolio-table-container">
+                        <table class="portfolio-table" id="portfolio-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Weight %</th>
+                                    <th>Notional $</th>
+                                    <th>Entry Px</th>
+                                    <th>Current Px</th>
+                                    <th>P&L $</th>
+                                    <th>P&L %</th>
+                                    <th>Position Value</th>
+                                </tr>
+                            </thead>
+                            <tbody id="portfolio-tbody">
+                                <!-- Data will be populated by JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Risk Metrics -->
+                <div class="risk-section">
+                    <h3>Real-time Risk Metrics</h3>
+                    <div class="risk-metrics">
+                        <div class="risk-card">
+                            <h4>Gross Exposure</h4>
+                            <div class="risk-value" id="gross-exposure">156.7%</div>
+                            <div class="risk-subtitle">(Total exposure = sum of |weights|)</div>
+                        </div>
+                        <div class="risk-card">
+                            <h4>Net Exposure</h4>
+                            <div class="risk-value" id="net-exposure">2.3%</div>
+                            <div class="risk-subtitle">(Net exposure = sum of weights)</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Weight Curves -->
+                <div class="weight-curves-section">
+                    <h3>Position Weight Evolution</h3>
+                    <div class="curve-controls">
+                        <select id="symbol-select">
+                            <option value="all">All Symbols</option>
+                        </select>
+                        <select id="focus-select">
+                            <option value="10">Top 10</option>
+                            <option value="20">Top 20</option>
+                            <option value="all">All</option>
+                        </select>
+                    </div>
+                    <div class="weight-chart-container">
+                        <canvas id="weight-curve-chart"></canvas>
+                    </div>
+                </div>
+
+                <!-- 12-Month Analytics -->
+                <div class="analytics-section">
+                    <h3>12-Month Performance Analytics</h3>
+                    <div class="analytics-grid">
+                        <div class="analytics-card">
+                            <h4>Hit Rate (Rolling)</h4>
+                            <canvas id="hit-rate-chart"></canvas>
+                        </div>
+                        <div class="analytics-card">
+                            <h4>Win/Loss Distribution</h4>
+                            <canvas id="distribution-chart"></canvas>
+                        </div>
+                        <div class="analytics-card">
+                            <h4>Data Quality</h4>
+                            <div class="freshness-details">
+                                <div class="freshness-item">
+                                    <span>On-time Days:</span>
+                                    <span id="on-time-days">343</span>
+                                </div>
+                                <div class="freshness-item">
+                                    <span>Avg Latency:</span>
+                                    <span id="avg-latency">2.3s</span>
+                                </div>
+                                <div class="freshness-item">
+                                    <span>P95 Latency:</span>
+                                    <span id="p95-latency">8.7s</span>
+                                </div>
+                                <div class="freshness-item">
+                                    <span>Missing Days:</span>
+                                    <span id="missing-days">21</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Daily Journal -->
+                <div class="journal-section">
+                    <h3>Daily Activity Log</h3>
+                    <div class="journal-entries" id="journal-entries">
+                        <div class="journal-entry">
+                            <div class="journal-time">08:06 UTC</div>
+                            <div class="journal-content">
+                                <strong>Daily signal loaded:</strong> lpxd_external_advisors_DF_20250916-0806.csv
+                                <br>28 active positions, total capital: $1,000,000
+                            </div>
+                        </div>
+                        <div class="journal-entry">
+                            <div class="journal-time">08:00 UTC</div>
+                            <div class="journal-content">
+                                <strong>Daily snapshot:</strong> Target positions updated
+                                <br>Long: 15 positions, Short: 13 positions
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        function showPage(pageId) {
+            // Hide all pages
+            const pages = document.querySelectorAll('.page');
+            pages.forEach(page => page.classList.remove('active'));
+            
+            // Show selected page
+            const targetPage = document.getElementById(pageId);
+            if (targetPage) {
+                targetPage.classList.add('active');
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "dfi-admin-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:signal": "echo build signal-dashboard && exit 0",
+    "build:admin": "echo build admin-portal && exit 0",
+    "build": "npm run build:signal && npm run build:admin"
+  }
+}
