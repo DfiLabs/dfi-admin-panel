@@ -1,0 +1,122 @@
+title: signal dashboard — context, problems, and detailed solution (S3‑driven UI + PV‑based sizing)
+date: 2025-09-20
+
+1) context (what the system is)
+- A browser dashboard shows:
+  - Portfolio Value (PV) and time series chart
+  - Daily P&L (reset after execution)
+  - Total P&L Since Inception (PV − 1,000,000)
+  - Positions table with per-row P&L
+- Data sources today:
+  - PV time series comes from S3: signal-dashboard/data/portfolio_value_log.jsonl
+  - Baseline prices (post-exec snapshot) are stored in S3: signal-dashboard/data/daily_baseline.json
+  - Live marks are pulled from Binance in the browser at runtime (not persisted)
+  - CSV (daily target allocation) provides side (via target_contracts sign) and target_notional
+
+2) current behavior (how numbers are produced now)
+- Daily P&L (client): sum_i [ side_i × (mark_i − baseline_i) / baseline_i × |notional_i| ]
+- PV (backend logger): PV = 1,000,000 + Daily P&L (minute cadence), written to portfolio_value_log.jsonl
+- Total P&L Since Inception (client): PV − 1,000,000
+- Baseline is captured after execution and stored in daily_baseline.json (used for today’s Daily P&L)
+- CSV sizing uses a fixed $1,000,000 gross notional target (weights × $1M), not today’s actual PV
+
+3) problems (what we don’t do well right now)
+- P1: Total P&L equals Daily P&L (not since inception)
+  - Cause: logger sets total_pnl = daily_pnl; PV is computed as 1M + daily_pnl
+  - Impact: Total P&L card is misleading; does not accumulate across days
+- P2: UI vs data drift
+  - Cause: browser fetches live Binance marks; S3 is the “database”
+  - Impact: Table/card P&L can differ from stored S3 values; hard to audit
+- P3: Sizing base not aligned with real capital
+  - Cause: daily CSV sized to fixed $1M instead of actual capital (PV)
+  - Impact: Exposure ignores compounding and may under/over-size vs true equity
+- P4: Time ambiguity around execution
+  - Cause: CSV file lands 15–45 minutes after “2355” timestamp
+  - Impact: Hard to anchor “pre-execution PV” and “prices used for sizing”
+- P5: No persisted execution prices/inputs snapshot
+  - Cause: we don’t store the exact prices used for sizing at detection time
+  - Impact: Limited auditability and reproducibility
+- P6: Chart/cards not strictly single-source-of-truth
+  - Cause: some metrics from S3, some from live API; inconsistent snapshots
+
+4) solution (precise, S3‑driven, auditable)
+4.1 single-source-of-truth S3 objects
+- portfolio_value_log.jsonl (append-only, 1/min):
+  {"timestamp","portfolio_value","daily_pnl","total_pnl"}
+  - Drives: PV card (latest) and chart (history)
+- daily_baseline.json (post-execution snapshot):
+  {"timestamp_utc","csv_filename","portfolio_value","prices":{SYMBOL: price}}
+  - Drives: baseline for today’s Daily P&L and per-row P&L
+- latest_prices.json (overwritten every 30–60s; atomic):
+  {"timestamp_utc","prices":{SYMBOL: mark}}
+  - Drives: “live” marks for table & Daily P&L without hitting Binance in the browser
+- latest_executed.json (convenience):
+  {"timestamp_utc","csv_filename"}
+- pre_execution.json (audit; written at CSV detection t0):
+  {"timestamp_utc": t0, "csv_filename", "csv_sha256", "pv_pre", "prices_at_t0": {SYMBOL: mark}}
+  - pv_pre = last PV from portfolio_value_log.jsonl strictly before t0 (fallback: most recent)
+
+4.2 client calculations (browser reads S3 only)
+- Per-row P&L_i = side_i × (latest_prices[sym] − baseline.prices[sym]) / baseline.prices[sym] × |notional_i|
+- Daily P&L = Σ_i Per-row P&L_i
+- PV (display) = latest portfolio_value from portfolio_value_log.jsonl
+- Total P&L Since Inception = PV − 1,000,000
+- No direct Binance calls in the UI; everything reproducible from S3 artifacts
+
+4.3 daily CSV sizing using PV (compounding enabled)
+- Inputs:
+  - CSV rows with ticker (BTC_USDT), target_notional, target_contracts (sign), ref_price (ignored for sizing)
+  - PV_pre (from pre_execution.json)
+  - prices_at_t0 (from pre_execution.json; mark prices at detection t0)
+- Build weights from CSV:
+  S = Σ_i |target_notional_i|  (the CSV’s gross base)
+  scale = PV_pre / S
+- For each symbol i:
+  side_i = sign(target_contracts_i) ∈ {+1, −1}
+  sym = ticker.replace("_","")  e.g., BTC_USDT → BTCUSDT
+  P_i = prices_at_t0[sym]
+  notional_target_i = |target_notional_i| × scale
+  qty_target_i = side_i × notional_target_i / P_i
+  Round qty_target_i to exchange stepSize; enforce minQty/minNotional
+- Execution delta:
+  delta_qty_i = qty_target_i − current_position_qty_i
+  If delta_qty_i > 0 → BUY delta_qty_i; if < 0 → SELL |delta_qty_i| (use reduceOnly on zero-cross)
+- Invariants:
+  Σ_i |notional_target_i| ≈ PV_pre (post-rounding)
+  sign(qty_target_i) = sign(target_contracts_i)
+
+4.4 timing anchors (remove filename assumptions)
+- t0 (pre-exec sizing time): now at CSV detection; persist pre_execution.json
+- pv_pre: last PV strictly before t0 from portfolio_value_log.jsonl
+- t1 (post-exec baseline time): now after orders filled; persist daily_baseline.json with prices at t1
+
+5) formulas (for clarity)
+- Daily P&L (today):
+  Σ_i [ side_i × (mark_i(t) − baseline_i(t1)) / baseline_i(t1) × |notional_i| ]
+- PV (logger):
+  portfolio_value(t) = 1,000,000 + daily_pnl(t)
+  (Note: total_pnl in logger currently equals daily_pnl; accumulation can be added later)
+- Total P&L Since Inception (UI):
+  portfolio_value_latest − 1,000,000
+
+6) logger behavior (known limitation and path forward)
+- Current: total_pnl = daily_pnl (not accumulated). PV = 1,000,000 + daily_pnl
+- UI’s “Total P&L Since Inception” = PV − 1,000,000 → matches daily P&L today
+- Optional enhancement (future): accumulate total_pnl across days using prior-day cumulative and today’s daily_pnl, then set PV = 1,000,000 + total_pnl
+
+7) rollout plan (stepwise)
+- Add latest_prices.json writer (every 60s; atomic overwrite)
+- Add pre_execution.json creation on CSV detection (t0)
+- Switch dashboard to read latest_prices.json + daily_baseline.json for table and Daily P&L
+- Keep chart and PV card on portfolio_value_log.jsonl
+- (Optional) Implement accumulated total_pnl in the logger
+- Validate invariants and identities on each tick:
+  (portfolio_value − 1,000,000) = total_pnl
+  total_pnl − daily_pnl = base_cumulative (if/when base_cumulative is used)
+
+8) what this fixes
+- Total P&L card meaning is correct and auditable
+- UI equals “what’s in S3”; no drift from live Binance calls
+- Sizing reflects actual capital (PV_pre), not a fixed $1M
+- Time ambiguity removed via pre_execution.json and daily_baseline.json anchors
+- Auditability: exact inputs (PV_pre, prices_at_t0, SHA256) and outputs (baseline prices, PV series) are stored
