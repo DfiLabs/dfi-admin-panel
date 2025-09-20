@@ -437,33 +437,70 @@ body {
     border-color: rgba(102, 126, 234, 0.3);
 }
 
-/* Long/Short Position Cards */
-.card.long-position {
-    border-left: 4px solid rgba(34, 197, 94, 0.6);
-    background: linear-gradient(135deg, rgba(34, 197, 94, 0.05) 0%, rgba(34, 197, 94, 0.02) 100%);
+/* Position Summary Cards - In Section Headers */
+.position-summary-card {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 252, 0.9) 100%);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(226, 232, 240, 0.8);
+    border-radius: 16px;
+    padding: var(--space-lg);
+    margin-bottom: var(--space-lg);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+    transition: all 0.3s ease;
 }
 
-.card.long-position::before {
-    background: linear-gradient(90deg, rgba(34, 197, 94, 0.8), rgba(34, 197, 94, 0.4));
+.position-summary-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
 }
 
-.card.long-position:hover {
-    border-color: rgba(34, 197, 94, 0.3);
-    box-shadow: 0 8px 32px rgba(34, 197, 94, 0.15);
+.position-summary-card.long-position {
+    border-left: 4px solid rgba(59, 130, 246, 0.6);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, rgba(248, 250, 252, 0.9) 100%);
 }
 
-.card.short-position {
+.position-summary-card.short-position {
     border-left: 4px solid rgba(239, 68, 68, 0.6);
-    background: linear-gradient(135deg, rgba(239, 68, 68, 0.05) 0%, rgba(239, 68, 68, 0.02) 100%);
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.05) 0%, rgba(248, 250, 252, 0.9) 100%);
 }
 
-.card.short-position::before {
-    background: linear-gradient(90deg, rgba(239, 68, 68, 0.8), rgba(239, 68, 68, 0.4));
+.summary-metrics {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    gap: var(--space-lg);
 }
 
-.card.short-position:hover {
-    border-color: rgba(239, 68, 68, 0.3);
-    box-shadow: 0 8px 32px rgba(239, 68, 68, 0.15);
+.summary-metrics .metric {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.metric-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: var(--space-xs);
+}
+
+.metric-value {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+    font-variant-numeric: tabular-nums;
+}
+
+.metric-value.positive {
+    color: var(--success);
+}
+
+.metric-value.negative {
+    color: var(--error);
 }
 
 .card h3 {
@@ -943,7 +980,7 @@ tr:hover td {
 }
 
 .top-performers-card.longs::before {
-    background: linear-gradient(90deg, rgba(34, 197, 94, 0.8), rgba(22, 163, 74, 0.8));
+    background: linear-gradient(90deg, rgba(59, 130, 246, 0.8), rgba(37, 99, 235, 0.8));
 }
 
 .top-performers-card.shorts::before {
@@ -962,7 +999,7 @@ tr:hover td {
 }
 
 .top-performers-card.longs h4 {
-    background: linear-gradient(135deg, rgba(34, 197, 94, 1), rgba(22, 163, 74, 1));
+    background: linear-gradient(135deg, rgba(59, 130, 246, 1), rgba(37, 99, 235, 1));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;

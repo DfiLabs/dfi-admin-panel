@@ -78,6 +78,11 @@
                     <div class="value" id="total-pnl">Loading...</div>
                     <div class="percentage" id="total-pnl-percent"></div>
                 </div>
+                <div class="card">
+                    <h3>Positions</h3>
+                    <div class="value" id="total-positions-count">Loading...</div>
+                    <div class="subtitle">Total Open Positions</div>
+                </div>
                 <div class="card long-position">
                     <h3>Long Positions</h3>
                     <div class="value" id="long-notional">Loading...</div>
@@ -264,6 +269,8 @@
                 // Update current snapshot
                 currentSnapshot.positions = positions;
                 currentSnapshot.baselinePrices = baselinePrices;
+                console.log('🔍 DEBUG: Loaded positions count:', positions.length);
+                console.log('🔍 DEBUG: First 3 positions:', positions.slice(0, 3));
                 currentSnapshot.dailyPnL = 0; // Reset daily P&L
                 
                 console.log('Daily CSV loaded, baseline set, Daily P&L reset to 0');
@@ -327,33 +334,72 @@
         // Create new snapshot (single source of truth)
         async function createSnapshot() {
             console.log('🔄 Creating new snapshot...', new Date().toISOString());
+            console.log('🔍 CACHE BUST: Debug logs updated at 13:22:00 - VERSION 2.0');
+            console.log('🔍 FORCE REFRESH: This should show the correct P&L calculation!');
+            console.log('🔍 DEBUG: currentSnapshot.positions.length =', currentSnapshot.positions.length);
+            console.log('🔍 DEBUG: currentSnapshot.baselinePrices keys =', Object.keys(currentSnapshot.baselinePrices || {}));
+            console.log('🔍 DEBUG: currentSnapshot.currentPrices keys =', Object.keys(currentSnapshot.currentPrices || {}));
+            
             if (currentSnapshot.positions.length === 0) {
-                console.log('No positions loaded yet');
+                console.log('❌ No positions loaded yet');
                 return;
             }
             
             // Fetch current prices from Binance
             const currentPrices = await fetchCurrentPrices(currentSnapshot.positions);
+            console.log('🔍 DEBUG: Fetched currentPrices keys =', Object.keys(currentPrices || {}));
             
             // Calculate Daily P&L (vs baseline)
             let dailyPnL = 0;
             let calculatedPositions = 0;
             console.log('🔍 Calculating Daily P&L...');
             
-            currentSnapshot.positions.forEach(position => {
+            currentSnapshot.positions.forEach((position, index) => {
                 const symbol = (position.ticker || position.ric || position.internal_code).replace('_', '');
                 const baselinePrice = currentSnapshot.baselinePrices[symbol];
                 const currentPrice = currentPrices[symbol];
                 const notional = parseFloat(position.target_notional || 0);
                 const side = parseFloat(position.target_contracts) > 0 ? 1 : -1;
                 
+                console.log(`🔍 DEBUG Position ${index}: ${symbol}`, {
+                    baselinePrice,
+                    currentPrice,
+                    notional,
+                    side,
+                    hasBaseline: !!baselinePrice,
+                    hasCurrent: !!currentPrice,
+                    target_contracts: position.target_contracts,
+                    target_notional: position.target_notional
+                });
+                
                 if (baselinePrice && currentPrice) {
+                    const contracts = parseFloat(position.target_contracts);
+                    const notional = parseFloat(position.target_notional || 0);
+                    // FIXED: Use same calculation as table: percentage change * notional
                     const pnl = side * (currentPrice - baselinePrice) / baselinePrice * Math.abs(notional);
+                    console.log(`🔍 CALCULATION FIX: ${symbol} = ${side} * (${currentPrice} - ${baselinePrice}) / ${baselinePrice} * ${Math.abs(notional)} = ${pnl.toFixed(2)}`);
                     dailyPnL += pnl;
                     calculatedPositions++;
                     
-                    if (calculatedPositions <= 3) {
-                        console.log(`🔍 ${symbol}: baseline=${baselinePrice}, current=${currentPrice}, side=${side}, notional=${notional.toFixed(0)}, pnl=${pnl.toFixed(2)}`);
+                    console.log(`🔍 ${symbol}: baseline=${baselinePrice}, current=${currentPrice}, side=${side}, notional=${Math.abs(notional)}, contracts=${contracts}, pnl=${pnl.toFixed(2)}`);
+                    
+                    // Log all positions, not just first 3
+                    if (calculatedPositions <= 5) {
+                        const priceDiff = currentPrice - baselinePrice;
+                        const priceChangePercent = priceDiff / baselinePrice;
+                        const calculatedPnl = side * priceChangePercent * Math.abs(notional);
+                        
+                        console.log(`🔍 FULL DEBUG ${symbol}:`, {
+                            baselinePrice,
+                            currentPrice,
+                            priceDiff,
+                            priceChangePercent: (priceChangePercent * 100).toFixed(4) + '%',
+                            side,
+                            notional: Math.abs(notional),
+                            calculatedPnl: calculatedPnl.toFixed(2),
+                            actualPnl: pnl.toFixed(2),
+                            match: Math.abs(calculatedPnl - pnl) < 0.01
+                        });
                     }
                 } else {
                     console.log(`⚠️ Missing data for ${symbol}: baseline=${!!baselinePrice}, current=${!!currentPrice}`);
@@ -361,12 +407,24 @@
             });
             
             console.log(`📊 Calculated ${calculatedPositions} positions, total P&L: ${dailyPnL.toFixed(2)}`);
+            console.log('🔍 DEBUG: Final dailyPnL =', dailyPnL);
+            console.log('🔍 DEBUG: calculatedPositions =', calculatedPositions);
             
             // Update snapshot
             currentSnapshot.timestamp = new Date();
             currentSnapshot.currentPrices = currentPrices;
             currentSnapshot.dailyPnL = dailyPnL;
-            currentSnapshot.portfolioValue = initialCapital + dailyPnL; // Simple: PV = 1M + Daily P&L
+            
+            console.log('🔍 DEBUG: Updated currentSnapshot.dailyPnL =', currentSnapshot.dailyPnL);
+            
+            // Only set portfolio value if we don't have S3 data yet
+            // If we have S3 data, keep the real portfolio value from S3 logs
+            if (!currentSnapshot.portfolioValue || currentSnapshot.portfolioValue === initialCapital) {
+                currentSnapshot.portfolioValue = initialCapital + dailyPnL;
+                console.log('📊 Using calculated Portfolio Value (no S3 data yet)');
+            } else {
+                console.log(`📊 Keeping S3 Portfolio Value: $${currentSnapshot.portfolioValue.toFixed(2)}`);
+            }
             
             // Update UI with this snapshot
             updateUI();
@@ -378,6 +436,11 @@
         // Update UI with current snapshot
         function updateUI() {
             const snapshot = currentSnapshot;
+            console.log('🔍 DEBUG: updateUI called');
+            console.log('🔍 DEBUG: currentSnapshot =', currentSnapshot);
+            console.log('🔍 DEBUG: currentSnapshot.dailyPnL =', currentSnapshot?.dailyPnL);
+            console.log('🔍 DEBUG: currentSnapshot.portfolioValue =', currentSnapshot?.portfolioValue);
+            
             console.log('🔄 Updating UI with snapshot:', {
                 timestamp: snapshot.timestamp?.toISOString(),
                 portfolioValue: snapshot.portfolioValue,
@@ -405,12 +468,13 @@
             }, 1000);
             
             // Daily P&L
+            console.log('🔍 DEBUG: Setting Daily P&L to:', snapshot.dailyPnL);
             document.getElementById('daily-pnl').textContent = formatCurrency(snapshot.dailyPnL);
             document.getElementById('daily-pnl').className = `value ${snapshot.dailyPnL >= 0 ? 'positive' : 'negative'}`;
             document.getElementById('daily-pnl-percent').textContent = `(${formatPercentage((snapshot.dailyPnL / initialCapital) * 100)})`;
             document.getElementById('daily-pnl-percent').className = `percentage ${snapshot.dailyPnL >= 0 ? 'positive' : 'negative'}`;
             
-            // Total P&L = PV - 1M
+            // Total P&L Since Inception = Portfolio Value - $1,000,000
             const totalPnL = snapshot.portfolioValue - initialCapital;
             document.getElementById('total-pnl').textContent = formatCurrency(totalPnL);
             document.getElementById('total-pnl').className = `value ${totalPnL >= 0 ? 'positive' : 'negative'}`;
@@ -431,6 +495,10 @@
             document.getElementById('short-pnl-percent').textContent = `(${formatCurrency(longShortMetrics.shortPnL)})`;
             document.getElementById('short-pnl-percent').className = `percentage ${longShortMetrics.shortPnL >= 0 ? 'positive' : 'negative'}`;
             document.getElementById('short-count').textContent = `${longShortMetrics.shortCount} positions`;
+            
+            // Update total positions count
+            const totalPositions = snapshot.positions ? snapshot.positions.length : 0;
+            document.getElementById('total-positions-count').textContent = totalPositions.toString();
             
             // Update delta progress bar
             createDeltaProgressBar();
@@ -952,10 +1020,19 @@
         }
         
         function calculateLongShortMetrics(positions) {
-            if (!positions) return { 
-                longNotional: 0, longPnL: 0, longCount: 0,
-                shortNotional: 0, shortPnL: 0, shortCount: 0 
-            };
+            console.log('🔍 calculateLongShortMetrics called with:', {
+                positions: positions ? positions.length : 0,
+                currentPrices: currentSnapshot.currentPrices ? Object.keys(currentSnapshot.currentPrices).length : 0,
+                baselinePrices: currentSnapshot.baselinePrices ? Object.keys(currentSnapshot.baselinePrices).length : 0
+            });
+            
+            if (!positions || !currentSnapshot.currentPrices || !currentSnapshot.baselinePrices) {
+                console.log('⚠️ Missing data in calculateLongShortMetrics');
+                return { 
+                    longNotional: 0, longPnL: 0, longCount: 0,
+                    shortNotional: 0, shortPnL: 0, shortCount: 0 
+                };
+            }
             
             let longNotional = 0;
             let longPnL = 0;
@@ -968,12 +1045,16 @@
                 const notional = parseFloat(position.target_notional);
                 const contracts = parseFloat(position.target_contracts);
                 const entryPrice = parseFloat(position.ref_price);
-                const currentPrice = parseFloat(position.current_price);
                 
-                if (notional && contracts && entryPrice && currentPrice) {
-                    // Calculate P&L for this position
+                // Get current price from currentSnapshot.currentPrices
+                const symbol = (position.ticker || position.ric || position.internal_code).replace('_', '');
+                const currentPrice = currentSnapshot.currentPrices[symbol];
+                const baselinePrice = currentSnapshot.baselinePrices[symbol];
+                
+                if (notional && contracts && entryPrice && currentPrice && baselinePrice) {
+                    // Calculate P&L for this position using baseline vs current
                     const sideMultiplier = contracts > 0 ? 1 : -1; // 1 for long, -1 for short
-                    const pnl = (currentPrice - entryPrice) * Math.abs(contracts) * sideMultiplier;
+                    const pnl = sideMultiplier * (currentPrice - baselinePrice) / baselinePrice * Math.abs(notional);
                     
                     if (contracts > 0) {
                         // Long position
@@ -989,7 +1070,7 @@
                 }
             });
             
-            return {
+            const result = {
                 longNotional,
                 longPnL,
                 longCount,
@@ -997,6 +1078,9 @@
                 shortPnL,
                 shortCount
             };
+            
+            console.log('📊 calculateLongShortMetrics result:', result);
+            return result;
         }
         
         // Top Performers
@@ -1105,32 +1189,51 @@
         updateTime();
         setInterval(updateTime, 1000);
         
-        // Load historical PV data from S3 first
+        // Load historical PV data from S3 first, THEN load CSV and start snapshots
         loadHistoricalPVData('1D').then(historicalData => {
             console.log(`📊 Loaded ${historicalData.length} historical PV points from S3`);
             console.log('📊 S3 Data:', historicalData);
             pvLogs = historicalData;
+            
+            // Update portfolio value from latest S3 data
+            if (historicalData.length > 0) {
+                const latestPV = historicalData[historicalData.length - 1].portfolio_value || historicalData[historicalData.length - 1].portfolioValue;
+                if (latestPV && currentSnapshot) {
+                    currentSnapshot.portfolioValue = latestPV;
+                    console.log(`📊 Updated Portfolio Value from S3: $${latestPV.toFixed(2)}`);
+                }
+            }
+            
             updateChart(historicalData, '1D'); // Pass the data directly to show full chart
+            
+            // NOW load CSV and start snapshots (after S3 data is loaded)
+            loadDailyCSV().then(() => {
+                // Create initial snapshot (S3 PV should be set by now)
+                createSnapshot();
+                
+                // Update positions and P&L every 10 seconds (tick by tick) - faster for testing
+                setInterval(createSnapshot, 10 * 1000);
+                
+                // Check for new CSV every 10 minutes (around execution time)
+                setInterval(checkForNewCSV, 10 * 60 * 1000);
+                
+                // Update chart every 5 minutes with fresh S3 data
+                setInterval(updateChartFromS3, 5 * 60 * 1000);
+            });
+            
         }).catch(error => {
             console.error('Error loading historical data:', error);
             console.log('📊 Initializing chart with empty data');
             pvLogs = [];
             updateChart(); // This will show the placeholder chart
-        });
-        
-        // Load daily CSV first
-        loadDailyCSV().then(() => {
-            // Create initial snapshot
-            createSnapshot();
             
-            // Update positions and P&L every 10 seconds (tick by tick) - faster for testing
-            setInterval(createSnapshot, 10 * 1000);
-            
-            // Check for new CSV every 10 minutes (around execution time)
-            setInterval(checkForNewCSV, 10 * 60 * 1000);
-            
-            // Update chart every 5 minutes with fresh S3 data
-            setInterval(updateChartFromS3, 5 * 60 * 1000);
+            // Still load CSV even if S3 fails
+            loadDailyCSV().then(() => {
+                createSnapshot();
+                setInterval(createSnapshot, 10 * 1000);
+                setInterval(checkForNewCSV, 10 * 60 * 1000);
+                setInterval(updateChartFromS3, 5 * 60 * 1000);
+            });
         });
         // CSV info toggle function
         function toggleCSVInfo() {
@@ -1162,6 +1265,18 @@
                     
                     // Update pvLogs with fresh S3 data
                     pvLogs = s3Data;
+                    
+                    // Update portfolio value from latest S3 data
+                    if (s3Data.length > 0) {
+                        const latestPV = s3Data[s3Data.length - 1].portfolio_value || s3Data[s3Data.length - 1].portfolioValue;
+                        if (latestPV && currentSnapshot) {
+                            currentSnapshot.portfolioValue = latestPV;
+                            console.log(`📊 Updated Portfolio Value from S3 refresh: $${latestPV.toFixed(2)}`);
+                            
+                            // Update UI with new portfolio value
+                            updateUI();
+                        }
+                    }
                     
                     // Update chart with current timeframe only if data has changed
                     const activeButton = document.querySelector('.time-button.active');
