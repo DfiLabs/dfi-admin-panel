@@ -199,6 +199,7 @@
         };
 
         const initialCapital = 1000000;
+        let currentPVPre = null; // Will be loaded from pre_execution.json
         let portfolioChart = null;
 
         // Update time display
@@ -294,6 +295,32 @@
             }
         }
         
+        // Load PV_pre from pre_execution.json for accurate percentage calculations
+        async function loadPVPre() {
+            try {
+                console.log('🔍 Loading PV_pre from pre_execution.json...');
+                const response = await fetch('/signal-dashboard/data/pre_execution.json');
+                if (response.ok) {
+                    const data = await response.json();
+                    const pvPre = parseFloat(data.pv_pre);
+                    if (pvPre && pvPre > 0) {
+                        currentPVPre = pvPre;
+                        console.log(`📊 Loaded PV_pre: $${pvPre.toFixed(2)}`);
+                        return pvPre;
+                    } else {
+                        console.log('⚠️ Invalid PV_pre in pre_execution.json, using initial capital');
+                        return initialCapital;
+                    }
+                } else {
+                    console.log('⚠️ No pre_execution.json available, using initial capital');
+                    return initialCapital;
+                }
+            } catch (error) {
+                console.error('Error loading PV_pre:', error);
+                return initialCapital; // Fallback to initial capital
+            }
+        }
+
         // Load current mark prices from S3 latest_prices.json
         async function fetchCurrentPrices(positions) {
             try {
@@ -460,18 +487,22 @@
                 timeElement.style.borderRadius = '';
             }, 1000);
             
+            // Use PV_pre for percentage calculations if available, otherwise use initialCapital
+            const referenceCapital = currentPVPre || initialCapital;
+
             // Daily P&L
             console.log('🔍 DEBUG: Setting Daily P&L to:', snapshot.dailyPnL);
+            console.log('🔍 DEBUG: Using reference capital for %:', referenceCapital);
             document.getElementById('daily-pnl').textContent = formatCurrency(snapshot.dailyPnL);
             document.getElementById('daily-pnl').className = `value ${snapshot.dailyPnL >= 0 ? 'positive' : 'negative'}`;
-            document.getElementById('daily-pnl-percent').textContent = `(${formatPercentage((snapshot.dailyPnL / initialCapital) * 100)})`;
+            document.getElementById('daily-pnl-percent').textContent = `(${formatPercentage((snapshot.dailyPnL / referenceCapital) * 100)})`;
             document.getElementById('daily-pnl-percent').className = `percentage ${snapshot.dailyPnL >= 0 ? 'positive' : 'negative'}`;
-            
+
             // Total P&L Since Inception = Portfolio Value - $1,000,000
             const totalPnL = snapshot.portfolioValue - initialCapital;
             document.getElementById('total-pnl').textContent = formatCurrency(totalPnL);
             document.getElementById('total-pnl').className = `value ${totalPnL >= 0 ? 'positive' : 'negative'}`;
-            document.getElementById('total-pnl-percent').textContent = `(${formatPercentage((totalPnL / initialCapital) * 100)})`;
+            document.getElementById('total-pnl-percent').textContent = `(${formatPercentage((totalPnL / referenceCapital) * 100)})`;
             document.getElementById('total-pnl-percent').className = `percentage ${totalPnL >= 0 ? 'positive' : 'negative'}`;
             
             // Calculate Long/Short metrics
@@ -527,7 +558,7 @@
                 const currentPrice = snapshot.currentPrices[binanceSymbol];
                 const notional = parseFloat(position.target_notional || 0);
                 const side = parseFloat(position.target_contracts) > 0 ? 'LONG' : 'SHORT';
-                const weight = (Math.abs(notional) / initialCapital) * 100;
+                const weight = (Math.abs(notional) / referenceCapital) * 100;
                 
                 let pnl = 0;
                 let pnlPercent = 0;
@@ -675,7 +706,7 @@
                 console.log('📊 No data available, showing empty chart');
                 data = [{
                     timestamp: new Date().toISOString(),
-                    portfolioValue: 1000000,
+                    portfolioValue: referenceCapital,
                     daily_pnl: 0,
                     total_pnl: 0
                 }];
@@ -1198,7 +1229,14 @@
             }
             
             updateChart(historicalData, '1D'); // Pass the data directly to show full chart
-            
+
+            // Load PV_pre for accurate percentage calculations
+            loadPVPre().then(() => {
+                console.log('📊 PV_pre loaded for percentage calculations');
+            }).catch(error => {
+                console.error('Error loading PV_pre:', error);
+            });
+
             // NOW load CSV and start snapshots (after S3 data is loaded)
             loadDailyCSV().then(() => {
                 // Create initial snapshot (S3 PV should be set by now)
@@ -1221,6 +1259,12 @@
             updateChart(); // This will show the placeholder chart
             
             // Still load CSV even if S3 fails
+            loadPVPre().then(() => {
+                console.log('📊 PV_pre loaded for fallback mode');
+            }).catch(error => {
+                console.error('Error loading PV_pre in fallback:', error);
+            });
+
             loadDailyCSV().then(() => {
                 createSnapshot();
                 setInterval(createSnapshot, 10 * 1000);
