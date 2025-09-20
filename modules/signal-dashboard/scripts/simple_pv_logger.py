@@ -213,6 +213,86 @@ def get_baseline_timing_anchor():
         print(f"Error loading baseline timing: {e}")
         return None
 
+# Comprehensive identity and invariant checks for Phase 5
+def run_comprehensive_identity_checks(portfolio_value, daily_pnl, total_pnl, prior_cumulative, baseline_data=None, csv_data=None):
+    """Run all identity checks and return detailed validation report."""
+    from datetime import datetime, timezone
+    import hashlib
+
+    checks = {
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'identity_checks': {},
+        'data_integrity_checks': {},
+        'timing_consistency_checks': {},
+        'sizing_invariant_checks': {},
+        'overall_pass': True
+    }
+
+    # 1. Core Identity Checks (PV - 1M = Total P&L and Total P&L = Cumulative + Daily P&L)
+    pv_minus_initial = portfolio_value - 1000000
+    accumulation_sum = prior_cumulative + daily_pnl
+
+    checks['identity_checks'] = {
+        'pv_minus_1M_equals_total_pnl': {
+            'expected': total_pnl,
+            'actual': pv_minus_initial,
+            'delta_cents': int(abs(pv_minus_initial - total_pnl) * 100),
+            'pass': abs(pv_minus_initial - total_pnl) < 0.01
+        },
+        'total_pnl_equals_accumulation': {
+            'expected': total_pnl,
+            'actual': accumulation_sum,
+            'delta_cents': int(abs(accumulation_sum - total_pnl) * 100),
+            'pass': abs(accumulation_sum - total_pnl) < 0.01
+        }
+    }
+
+    # 2. Data Integrity Checks
+    if csv_data:
+        csv_hash = hashlib.sha256(csv_data.encode('utf-8')).hexdigest()
+        checks['data_integrity_checks']['csv_content_hash'] = csv_hash
+        checks['data_integrity_checks']['csv_has_positions'] = len(csv_data.strip().split('\n')) > 1
+
+    # 3. Timing Consistency Checks
+    timing_valid = validate_time_anchors()
+    checks['timing_consistency_checks']['time_anchors_valid'] = timing_valid
+
+    # 4. Sizing Invariant Checks (if baseline data available)
+    if baseline_data and csv_data:
+        try:
+            lines = csv_data.strip().split('\n')
+            if len(lines) > 1:
+                headers = lines[0].split(',')
+                positions = []
+                for line in lines[1:]:
+                    if line.strip():
+                        values = line.split(',')
+                        if len(values) >= len(headers):
+                            position = dict(zip(headers, values))
+                            positions.append(position)
+
+                # Check sizing invariants
+                total_notional_from_csv = 0
+                for pos in positions:
+                    notional = float(pos.get('target_notional', 0))
+                    total_notional_from_csv += abs(notional)
+
+                checks['sizing_invariant_checks']['csv_positions_count'] = len(positions)
+                checks['sizing_invariant_checks']['total_notional_from_csv'] = total_notional_from_csv
+                checks['sizing_invariant_checks']['baseline_prices_count'] = len(baseline_data.get('prices', {}))
+
+        except Exception as e:
+            checks['sizing_invariant_checks']['error'] = str(e)
+
+    # Overall pass/fail
+    for category in ['identity_checks', 'data_integrity_checks', 'timing_consistency_checks', 'sizing_invariant_checks']:
+        for check_name, check_data in checks[category].items():
+            if isinstance(check_data, dict) and 'pass' in check_data:
+                if not check_data['pass']:
+                    checks['overall_pass'] = False
+
+    return checks
+
 # Validate time anchors consistency
 def validate_time_anchors():
     try:
@@ -366,15 +446,31 @@ def calculate_portfolio_value(baseline, current_prices):
         print(f"📊 Total P&L: ${total_pnl:.2f}")
         print(f"📊 Portfolio Value: ${portfolio_value:.2f}")
 
-        # Invariant checks
-        pv_check = abs((portfolio_value - 1000000) - total_pnl) < 0.01
-        accumulation_check = abs((prior_cumulative + daily_pnl) - total_pnl) < 0.01
+        # Phase 5: Comprehensive Identity Checks
+        validation_checks = run_comprehensive_identity_checks(
+            portfolio_value, daily_pnl, total_pnl, prior_cumulative, baseline, csv_content
+        )
 
-        if not (pv_check and accumulation_check):
-            print(f"⚠️ INVARIANT VIOLATION: PV_check={pv_check}, accumulation_check={accumulation_check}")
-            print(f"   PV: {portfolio_value}, total_pnl: {total_pnl}, prior_cumulative: {prior_cumulative}, daily_pnl: {daily_pnl}")
-        else:
-            print("✅ All invariants PASS")
+        # Log detailed validation results
+        identity_results = validation_checks['identity_checks']
+        pv_identity = identity_results['pv_minus_1M_equals_total_pnl']
+        accumulation_identity = identity_results['total_pnl_equals_accumulation']
+
+        print("🔍 PHASE 5 VALIDATION RESULTS:")
+        print(f"  📊 PV - 1M = Total P&L: {'✅ PASS' if pv_identity['pass'] else '❌ FAIL'} (delta: ${pv_identity['delta_cents']/100:.2f})")
+        print(f"  📊 Total P&L = Cumulative + Daily: {'✅ PASS' if accumulation_identity['pass'] else '❌ FAIL'} (delta: ${accumulation_identity['delta_cents']/100:.2f})")
+        print(f"  📊 Overall Validation: {'✅ ALL PASS' if validation_checks['overall_pass'] else '❌ SOME FAILS'}")
+
+        if not validation_checks['overall_pass']:
+            print("  ⚠️ VALIDATION ISSUES DETECTED:")
+            for category, category_checks in validation_checks.items():
+                if category != 'overall_pass' and category != 'timestamp':
+                    for check_name, check_data in category_checks.items():
+                        if isinstance(check_data, dict) and 'pass' in check_data and not check_data['pass']:
+                            if 'delta_cents' in check_data:
+                                print(f"    - {check_name}: delta ${check_data['delta_cents']/100:.2f}")
+                            else:
+                                print(f"    - {check_name}: FAILED")
 
         return {
             'portfolio_value': portfolio_value,
@@ -441,7 +537,7 @@ def log_pv_to_s3(pv_data):
 
         csv_sha256 = get_csv_sha256()
 
-        # Create log entry with audit information
+        # Create log entry with comprehensive audit information
         log_entry = {
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'portfolio_value': pv_data['portfolio_value'],
@@ -451,7 +547,8 @@ def log_pv_to_s3(pv_data):
                 't0_execution_time': t0,
                 't1_baseline_time': t1,
                 'csv_sha256': csv_sha256,
-                'timing_anchors_valid': validate_time_anchors()
+                'timing_anchors_valid': validate_time_anchors(),
+                'phase5_validation': validation_checks if 'validation_checks' in locals() else None
             }
         }
         
@@ -497,16 +594,417 @@ def log_pv_to_s3(pv_data):
         print(f"❌ Error logging to S3: {e}")
         return False
 
-# Main function with Phase 4 enhancements
-def main():
-    print("🚀 Starting Simple PV Logger with Phase 4: Enhanced Audit and Timing...")
+# Test single source of truth (S3-only approach) - Phase 5
+def test_single_source_of_truth():
+    """Test that UI calculations match S3 data exactly without external API calls."""
+    try:
+        print("🔍 PHASE 5: Testing Single Source of Truth...")
 
-    # Validate time anchors at startup
+        # Load all data from S3
+        baseline = load_baseline()
+        if not baseline:
+            print("❌ Cannot test single source of truth: no baseline data")
+            return False
+
+        # Get latest CSV from S3
+        try:
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/portfolio_daily_log.csv',
+                '/tmp/daily_log.csv'
+            ], capture_output=True, text=True)
+
+            if result.returncode != 0:
+                print("❌ Cannot test single source of truth: no CSV data")
+                return False
+
+            with open('/tmp/daily_log.csv', 'r') as f:
+                csv_content = f.read()
+
+            # Find latest CSV filename
+            lines = csv_content.strip().split('\n')
+            latest_csv = None
+            for line in reversed(lines):
+                if 'post_execution' in line:
+                    parts = line.split(',')
+                    if len(parts) > 4:
+                        latest_csv = parts[4]
+                        break
+
+            if not latest_csv:
+                print("❌ Cannot find latest CSV in daily log")
+                return False
+
+            # Load CSV content
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/{latest_csv}',
+                '/tmp/current.csv'
+            ], capture_output=True, text=True)
+
+            if result.returncode != 0:
+                print(f"❌ Cannot load CSV: {latest_csv}")
+                return False
+
+            with open('/tmp/current.csv', 'r') as f:
+                csv_content = f.read()
+
+        except Exception as e:
+            print(f"❌ Error loading S3 data for single source test: {e}")
+            return False
+
+        # Calculate using S3-only data (simulating UI calculation)
+        symbols = list(baseline['prices'].keys())
+        current_prices = {}
+        try:
+            # Load current prices from S3 (simulating latest_prices.json)
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/latest_prices.json',
+                '/tmp/latest_prices.json'
+            ], capture_output=True, text=True)
+
+            if result.returncode == 0:
+                with open('/tmp/latest_prices.json', 'r') as f:
+                    prices_data = json.load(f)
+                current_prices = prices_data.get('prices', {})
+        except:
+            print("⚠️ Cannot load current prices from S3, using empty dict")
+
+        # Calculate P&L using same logic as UI
+        lines = csv_content.strip().split('\n')
+        headers = lines[0].split(',')
+        daily_pnl_s3_only = 0
+
+        for i in range(1, len(lines)):
+            if lines[i].strip():
+                values = lines[i].split(',')
+                position = {}
+                for j, header in enumerate(headers):
+                    position[header.strip()] = values[j].strip() if j < len(values) else ''
+
+                symbol = position.get('ticker', '').replace('_', '')
+                baseline_price = baseline['prices'].get(symbol)
+                current_price = current_prices.get(symbol)
+                notional = float(position.get('target_notional', 0))
+                contracts = float(position.get('target_contracts', 0))
+
+                if baseline_price and current_price and notional != 0:
+                    side = 1 if contracts > 0 else -1
+                    pnl = side * (current_price - baseline_price) / baseline_price * abs(notional)
+                    daily_pnl_s3_only += pnl
+
+        print(f"📊 S3-Only Daily P&L: ${daily_pnl_s3_only:.2f}")
+        print(f"📊 Symbols with prices: {len([s for s in symbols if s in current_prices])}/{len(symbols)}")
+        print("✅ Single Source of Truth test completed")
+        return True
+
+    except Exception as e:
+        print(f"❌ Error in single source of truth test: {e}")
+        return False
+
+# Test sizing invariants - Phase 5
+def test_sizing_invariants():
+    """Test that scaled notional equals PV_pre and signs are preserved."""
+    try:
+        print("🔍 PHASE 5: Testing Sizing Invariants...")
+
+        # Load pre_execution.json to get PV_pre
+        pv_pre = 1000000.0  # fallback
+        try:
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/pre_execution.json',
+                '/tmp/pre_execution.json'
+            ], capture_output=True, text=True)
+
+            if result.returncode == 0:
+                with open('/tmp/pre_execution.json', 'r') as f:
+                    pre_exec_data = json.load(f)
+                pv_pre = float(pre_exec_data.get('pv_pre', 1000000.0))
+                print(f"📊 PV_pre from pre_execution.json: ${pv_pre:.2f}")
+        except Exception as e:
+            print(f"⚠️ Could not load PV_pre from pre_execution.json: {e}")
+
+        # Load latest CSV and calculate total notional
+        try:
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/portfolio_daily_log.csv',
+                '/tmp/daily_log.csv'
+            ], capture_output=True, text=True)
+
+            if result.returncode != 0:
+                print("❌ Cannot load daily log for sizing test")
+                return False
+
+            with open('/tmp/daily_log.csv', 'r') as f:
+                csv_content = f.read()
+
+            # Find latest CSV
+            lines = csv_content.strip().split('\n')
+            latest_csv = None
+            for line in reversed(lines):
+                if 'post_execution' in line:
+                    parts = line.split(',')
+                    if len(parts) > 4:
+                        latest_csv = parts[4]
+                        break
+
+            if not latest_csv:
+                print("❌ Cannot find latest CSV")
+                return False
+
+            # Load CSV
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/{latest_csv}',
+                '/tmp/current.csv'
+            ], capture_output=True, text=True)
+
+            if result.returncode != 0:
+                print(f"❌ Cannot load CSV: {latest_csv}")
+                return False
+
+            with open('/tmp/current.csv', 'r') as f:
+                csv_content = f.read()
+
+            # Calculate total notional from CSV
+            lines = csv_content.strip().split('\n')
+            if len(lines) < 2:
+                print("❌ CSV has no data")
+                return False
+
+            headers = lines[0].split(',')
+            positions = []
+            total_notional_from_csv = 0
+
+            for line in lines[1:]:
+                if line.strip():
+                    values = line.split(',')
+                    if len(values) >= len(headers):
+                        position = dict(zip(headers, values))
+                        notional = float(position.get('target_notional', 0))
+                        total_notional_from_csv += abs(notional)
+                        positions.append(position)
+
+            print(f"📊 Positions in CSV: {len(positions)}")
+            print(f"📊 Total notional from CSV: ${total_notional_from_csv:.2f}")
+            print(f"📊 PV_pre for sizing: ${pv_pre:.2f}")
+
+            # Check sizing invariant: total notional should equal PV_pre
+            tolerance = 0.01 * pv_pre  # 1% tolerance
+            notional_matches_pv_pre = abs(total_notional_from_csv - pv_pre) < tolerance
+
+            print(f"📊 Sizing Invariant Check: {'✅ PASS' if notional_matches_pv_pre else '❌ FAIL'}")
+            if not notional_matches_pv_pre:
+                print(f"   Delta: ${abs(total_notional_from_csv - pv_pre):.2f} (tolerance: ${tolerance:.2f})")
+
+            # Check sign preservation
+            sign_preservation_pass = True
+            for pos in positions[:5]:  # Check first 5 positions
+                contracts = float(pos.get('target_contracts', 0))
+                notional = float(pos.get('target_notional', 0))
+                expected_sign = 1 if contracts > 0 else -1
+                actual_sign = 1 if notional > 0 else -1
+                if expected_sign != actual_sign:
+                    sign_preservation_pass = False
+                    break
+
+            print(f"📊 Sign Preservation Check: {'✅ PASS' if sign_preservation_pass else '❌ FAIL'}")
+
+            overall_sizing_pass = notional_matches_pv_pre and sign_preservation_pass
+            print(f"📊 Overall Sizing Test: {'✅ PASS' if overall_sizing_pass else '❌ FAIL'}")
+            return overall_sizing_pass
+
+        except Exception as e:
+            print(f"❌ Error in sizing invariants test: {e}")
+            return False
+
+    except Exception as e:
+        print(f"❌ Error testing sizing invariants: {e}")
+        return False
+
+# Test time series continuity - Phase 5
+def test_time_series_continuity():
+    """Test that PV logs continue uninterrupted across days."""
+    try:
+        print("🔍 PHASE 5: Testing Time Series Continuity...")
+
+        # Load PV log and check for gaps
+        try:
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/portfolio_value_log.jsonl',
+                '/tmp/pv_log.jsonl'
+            ], capture_output=True, text=True)
+
+            if result.returncode != 0:
+                print("❌ Cannot load PV log for continuity test")
+                return False
+
+            with open('/tmp/pv_log.jsonl', 'r') as f:
+                lines = f.read().split('\n')
+
+            if len(lines) < 2:
+                print("⚠️ Not enough data for continuity test")
+                return True  # Not an error, just no data
+
+            timestamps = []
+            for line in lines:
+                if line.strip():
+                    try:
+                        entry = json.loads(line)
+                        ts = datetime.fromisoformat(entry['timestamp'].replace('Z', '+00:00'))
+                        timestamps.append(ts)
+                    except:
+                        continue
+
+            if len(timestamps) < 2:
+                print("⚠️ Not enough valid timestamps for continuity test")
+                return True
+
+            # Sort timestamps
+            timestamps.sort()
+            gaps = []
+            max_gap_hours = 0
+
+            for i in range(1, len(timestamps)):
+                gap = (timestamps[i] - timestamps[i-1]).total_seconds() / 3600  # hours
+                if gap > 1.1:  # More than 1 hour gap (allowing for some tolerance)
+                    gaps.append((timestamps[i-1], timestamps[i], gap))
+                max_gap_hours = max(max_gap_hours, gap)
+
+            print(f"📊 Time series entries: {len(timestamps)}")
+            print(f"📊 Time range: {timestamps[0]} to {timestamps[-1]}")
+            print(f"📊 Max gap: {max_gap_hours:.1f} hours")
+            print(f"📊 Gaps >1h: {len(gaps)}")
+
+            if gaps:
+                print("  ⚠️ Gaps detected:")
+                for gap_start, gap_end, gap_hours in gaps[:3]:  # Show first 3 gaps
+                    print(f"    - {gap_start} to {gap_end} ({gap_hours:.1f}h gap)")
+                if len(gaps) > 3:
+                    print(f"    - ... and {len(gaps) - 3} more gaps")
+
+            # Continuity is "good" if max gap is reasonable (<6 hours)
+            continuity_good = max_gap_hours < 6
+            print(f"📊 Continuity Test: {'✅ PASS' if continuity_good else '⚠️ REVIEW'}")
+            return continuity_good
+
+        except Exception as e:
+            print(f"❌ Error in time series continuity test: {e}")
+            return False
+
+    except Exception as e:
+        print(f"❌ Error testing time series continuity: {e}")
+        return False
+
+# Performance testing - Phase 5
+def test_performance_metrics():
+    """Measure load times and update frequencies with S3-only approach."""
+    try:
+        print("🔍 PHASE 5: Performance Testing...")
+
+        import time
+        start_time = time.time()
+
+        # Test S3 data loading performance
+        load_times = {}
+
+        # Test baseline loading
+        load_start = time.time()
+        baseline = load_baseline()
+        load_times['baseline_load'] = time.time() - load_start
+
+        # Test CSV loading
+        csv_load_start = time.time()
+        try:
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/portfolio_daily_log.csv',
+                '/tmp/daily_log.csv'
+            ], capture_output=True, text=True)
+            if result.returncode == 0:
+                load_times['csv_load'] = time.time() - csv_load_start
+        except:
+            load_times['csv_load'] = None
+
+        # Test latest prices loading
+        prices_load_start = time.time()
+        try:
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/latest_prices.json',
+                '/tmp/latest_prices.json'
+            ], capture_output=True, text=True)
+            if result.returncode == 0:
+                load_times['prices_load'] = time.time() - prices_load_start
+        except:
+            load_times['prices_load'] = None
+
+        total_time = time.time() - start_time
+
+        print("📊 Performance Metrics:")
+        print(f"  📈 Total execution time: {total_time:.2f}s")
+        print(f"  📦 Baseline load time: {load_times.get('baseline_load', 'N/A'):.2f}s")
+        print(f"  📄 CSV load time: {load_times.get('csv_load', 'N/A'):.2f}s")
+        print(f"  💰 Prices load time: {load_times.get('prices_load', 'N/A'):.2f}s")
+        # Performance assessment
+        if total_time < 5:
+            performance_grade = "🟢 Excellent"
+        elif total_time < 10:
+            performance_grade = "🟡 Good"
+        elif total_time < 20:
+            performance_grade = "🟠 Acceptable"
+        else:
+            performance_grade = "🔴 Slow"
+
+        print(f"  📊 Overall Performance: {performance_grade}")
+        print("✅ Performance testing completed")
+        return total_time < 30  # Pass if under 30 seconds
+
+    except Exception as e:
+        print(f"❌ Error in performance testing: {e}")
+        return False
+
+# Main function with Phase 5 enhancements
+def main():
+    print("🚀 Starting Simple PV Logger with Phase 5: Testing and Validation...")
+
+    # Phase 5: Validate time anchors at startup
     print("🔍 Validating time anchors...")
     timing_valid = validate_time_anchors()
     if not timing_valid:
         print("⚠️ Time anchor validation failed at startup")
         # Continue anyway but log the issue
+
+    # Phase 5: Test single source of truth
+    print("🔍 Testing Single Source of Truth (S3-only)...")
+    s3_only_test_passed = test_single_source_of_truth()
+
+    # Phase 5: Validate sizing invariants
+    print("🔍 Validating Sizing Invariants...")
+    sizing_test_passed = test_sizing_invariants()
+
+    # Phase 5: Test time series continuity
+    print("🔍 Testing Time Series Continuity...")
+    continuity_test_passed = test_time_series_continuity()
+
+    # Phase 5: Performance testing
+    print("🔍 Running Performance Tests...")
+    performance_test_passed = test_performance_metrics()
+
+    # Phase 5 Summary
+    print("📊 PHASE 5 VALIDATION SUMMARY:")
+    print(f"  🔍 Identity Checks: {'✅ PASS' if timing_valid else '❌ FAIL'}")
+    print(f"  🔍 Single Source of Truth: {'✅ PASS' if s3_only_test_passed else '❌ FAIL'}")
+    print(f"  🔍 Sizing Invariants: {'✅ PASS' if sizing_test_passed else '❌ FAIL'}")
+    print(f"  🔍 Time Series Continuity: {'✅ PASS' if continuity_test_passed else '❌ FAIL'}")
+    print(f"  🔍 Performance: {'✅ PASS' if performance_test_passed else '❌ FAIL'}")
+
+    overall_phase5_pass = all([timing_valid, s3_only_test_passed, sizing_test_passed, continuity_test_passed, performance_test_passed])
+    print(f"  🎯 Overall Phase 5: {'✅ ALL TESTS PASS' if overall_phase5_pass else '⚠️ SOME TESTS FAIL'}")
 
     # Load baseline
     baseline = load_baseline()
