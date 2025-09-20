@@ -2,11 +2,13 @@
 
 # Start PV Logger - Runs every 5 minutes
 # This script sets up a cron job to log PV data every 5 minutes
+# Uses simple_pv_logger.py which includes Phase 3-5 enhancements
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PV_LOGGER="$SCRIPT_DIR/pv_logger.py"
+PV_LOGGER="$SCRIPT_DIR/simple_pv_logger.py"
 
 echo "🚀 Setting up PV Logger to run every 5 minutes..."
+echo "📊 Using simple_pv_logger.py with Phase 3-5 enhancements"
 
 # Make sure the script is executable
 chmod +x "$PV_LOGGER"
