@@ -58,62 +58,226 @@ def get_current_prices(symbols):
             print(f"Error fetching price for {symbol}: {e}")
     return prices
 
-# Get prior cumulative P&L from portfolio_daily_log.csv
+# Get prior cumulative P&L using pre_execution.json timestamp as t0 anchor
 def get_prior_cumulative_pnl():
     try:
-        result = subprocess.run([
-            'aws', 's3', 'cp',
-            f's3://{S3_BUCKET}/signal-dashboard/data/portfolio_daily_log.csv',
-            '/tmp/daily_log.csv'
-        ], capture_output=True, text=True)
-
-        if result.returncode != 0:
-            print("Error loading daily log for cumulative")
-            return 0.0
-
-        with open('/tmp/daily_log.csv', 'r') as f:
-            lines = f.read().split('\n')
-
-        if len(lines) <= 1:
-            print("No data in daily log")
-            return 0.0
-
-        # Find the last pre_execution row from previous days
-        headers = lines[0].split(',')
-        cumulative_idx = 9 if len(headers) > 9 and 'cumulative_pnl' in headers[9] else None
-        action_idx = 5 if len(headers) > 5 and 'action' in headers[5] else None
-        date_idx = 1 if len(headers) > 1 and 'date' in headers[1] else None
-
-        if cumulative_idx is None:
-            print("Could not find cumulative_pnl column")
-            return 0.0
-
         from datetime import datetime, timezone
-        today_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
-        for line in reversed(lines[1:]):
-            if line.strip():
-                parts = line.split(',')
-                if len(parts) > max(cumulative_idx, action_idx or 0, date_idx or 0):
-                    action = parts[action_idx].strip() if action_idx else ''
-                    row_date = parts[date_idx].strip() if date_idx else ''
-                    if action == 'pre_execution' and row_date and row_date < today_utc:
-                        cumulative_val = float(parts[cumulative_idx]) if parts[cumulative_idx] else 0.0
-                        print(f"📊 Found prior cumulative P&L: ${cumulative_val:.2f} from {row_date}")
-                        return cumulative_val
+        # Load pre_execution.json to get t0 timestamp
+        try:
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/pre_execution.json',
+                '/tmp/pre_execution.json'
+            ], capture_output=True, text=True)
+
+            if result.returncode != 0:
+                print("Error loading pre_execution.json")
+                return 0.0
+
+            with open('/tmp/pre_execution.json', 'r') as f:
+                pre_exec_data = json.load(f)
+
+            t0_timestamp = pre_exec_data.get('timestamp_utc')
+            if not t0_timestamp:
+                print("No timestamp_utc in pre_execution.json")
+                return 0.0
+
+            t0 = datetime.fromisoformat(t0_timestamp.replace('Z', '+00:00'))
+            print(f"📊 Using t0 from pre_execution.json: {t0}")
+
+        except Exception as e:
+            print(f"Error loading pre_execution.json: {e}")
+            return 0.0
+
+        # Load portfolio_value_log.jsonl to find PV_pre (last entry strictly before t0)
+        try:
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/portfolio_value_log.jsonl',
+                '/tmp/pv_log.jsonl'
+            ], capture_output=True, text=True)
+
+            if result.returncode != 0:
+                print("Error loading PV log")
+                return 0.0
+
+            with open('/tmp/pv_log.jsonl', 'r') as f:
+                lines = f.read().split('\n')
+
+            pv_pre = None
+            pv_pre_timestamp = None
+
+            for line in reversed(lines):
+                if line.strip():
+                    try:
+                        entry = json.loads(line)
+                        entry_timestamp = datetime.fromisoformat(entry['timestamp'].replace('Z', '+00:00'))
+
+                        # Find the last entry strictly before t0
+                        if entry_timestamp < t0:
+                            pv_pre = float(entry.get('portfolio_value', 0))
+                            pv_pre_timestamp = entry_timestamp
+                            break
+                    except:
+                        continue
+
+            if pv_pre is not None:
+                print(f"📊 Found PV_pre: ${pv_pre:.2f} at {pv_pre_timestamp} (before t0: {t0})")
+                return 0.0  # Return 0 since we're getting PV_pre, not cumulative
+
+        except Exception as e:
+            print(f"Error finding PV_pre: {e}")
+
+        # Fallback: use portfolio_daily_log.csv to find cumulative from last pre_execution before t0
+        try:
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/portfolio_daily_log.csv',
+                '/tmp/daily_log.csv'
+            ], capture_output=True, text=True)
+
+            if result.returncode != 0:
+                print("Error loading daily log for fallback")
+                return 0.0
+
+            with open('/tmp/daily_log.csv', 'r') as f:
+                lines = f.read().split('\n')
+
+            if len(lines) <= 1:
+                print("No data in daily log")
+                return 0.0
+
+            # Find the last pre_execution row before t0
+            headers = lines[0].split(',')
+            cumulative_idx = 9 if len(headers) > 9 and 'cumulative_pnl' in headers[9] else None
+            action_idx = 5 if len(headers) > 5 and 'action' in headers[5] else None
+            timestamp_idx = 0 if len(headers) > 0 and 'timestamp' in headers[0] else None
+
+            if cumulative_idx is None:
+                print("Could not find cumulative_pnl column")
+                return 0.0
+
+            for line in reversed(lines[1:]):
+                if line.strip():
+                    parts = line.split(',')
+                    if len(parts) > max(cumulative_idx, action_idx or 0, timestamp_idx or 0):
+                        action = parts[action_idx].strip() if action_idx else ''
+                        row_timestamp_str = parts[timestamp_idx].strip() if timestamp_idx else ''
+                        if action == 'pre_execution' and row_timestamp_str:
+                            try:
+                                row_timestamp = datetime.fromisoformat(row_timestamp_str.replace('Z', '+00:00'))
+                                if row_timestamp < t0:
+                                    cumulative_val = float(parts[cumulative_idx]) if parts[cumulative_idx] else 0.0
+                                    print(f"📊 Found prior cumulative P&L: ${cumulative_val:.2f} at {row_timestamp} (before t0: {t0})")
+                                    return cumulative_val
+                            except:
+                                continue
+
+        except Exception as e:
+            print(f"Error in fallback cumulative search: {e}")
 
         print("No prior cumulative found, starting from 0")
         return 0.0
+
     except Exception as e:
         print(f"Error getting prior cumulative: {e}")
         return 0.0
 
-# Calculate portfolio value using actual position data with cumulative logic
+# Get baseline timing anchor from daily_baseline.json
+def get_baseline_timing_anchor():
+    try:
+        result = subprocess.run([
+            'aws', 's3', 'cp',
+            f's3://{S3_BUCKET}/signal-dashboard/data/daily_baseline.json',
+            '/tmp/daily_baseline.json'
+        ], capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print("Error loading daily_baseline.json")
+            return None
+
+        with open('/tmp/daily_baseline.json', 'r') as f:
+            baseline_data = json.load(f)
+
+        timestamp_utc = baseline_data.get('timestamp_utc')
+        if timestamp_utc:
+            t1 = datetime.fromisoformat(timestamp_utc.replace('Z', '+00:00'))
+            print(f"📊 Using t1 from daily_baseline.json: {t1}")
+            return t1
+        else:
+            print("No timestamp_utc in daily_baseline.json")
+            return None
+
+    except Exception as e:
+        print(f"Error loading baseline timing: {e}")
+        return None
+
+# Validate time anchors consistency
+def validate_time_anchors():
+    try:
+        from datetime import datetime, timezone
+
+        # Get t0 from pre_execution.json
+        try:
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/pre_execution.json',
+                '/tmp/pre_execution.json'
+            ], capture_output=True, text=True)
+
+            if result.returncode == 0:
+                with open('/tmp/pre_execution.json', 'r') as f:
+                    pre_exec_data = json.load(f)
+                t0_timestamp = pre_exec_data.get('timestamp_utc')
+                if t0_timestamp:
+                    t0 = datetime.fromisoformat(t0_timestamp.replace('Z', '+00:00'))
+                else:
+                    print("⚠️ No t0 timestamp in pre_execution.json")
+                    return False
+            else:
+                print("⚠️ Could not load pre_execution.json")
+                return False
+
+        except Exception as e:
+            print(f"⚠️ Error loading t0: {e}")
+            return False
+
+        # Get t1 from daily_baseline.json
+        t1 = get_baseline_timing_anchor()
+        if t1 is None:
+            print("⚠️ Could not get t1 from daily_baseline.json")
+            return False
+
+        # Validate t0 < current_time < t1 or t0 < t1 (depending on timing)
+        now = datetime.now(timezone.utc)
+
+        if t0 >= now:
+            print(f"⚠️ t0 ({t0}) is not before current time ({now})")
+            return False
+
+        if t1 <= t0:
+            print(f"⚠️ t1 ({t1}) is not after t0 ({t0})")
+            return False
+
+        print(f"✅ Time anchors validated: t0={t0}, t1={t1}, now={now}")
+        return True
+
+    except Exception as e:
+        print(f"Error validating time anchors: {e}")
+        return False
+
+# Calculate portfolio value using actual position data with enhanced audit and timing
 def calculate_portfolio_value(baseline, current_prices):
     if not baseline or 'prices' not in baseline:
         return None
 
-    # Get prior cumulative P&L
+    # Validate time anchors first
+    if not validate_time_anchors():
+        print("⚠️ Time anchor validation failed")
+        # Continue anyway but log the issue
+
+    # Get prior cumulative P&L using t0 timing anchor
     prior_cumulative = get_prior_cumulative_pnl()
 
     # Load the current CSV to get actual positions
@@ -222,15 +386,73 @@ def calculate_portfolio_value(baseline, current_prices):
         print(f"Error calculating portfolio value: {e}")
         return None
 
-# Log PV data to S3 using AWS CLI
+# Get CSV SHA256 for integrity
+def get_csv_sha256():
+    try:
+        result = subprocess.run([
+            'aws', 's3', 'cp',
+            f's3://{S3_BUCKET}/signal-dashboard/data/portfolio_daily_log.csv',
+            '/tmp/daily_log.csv'
+        ], capture_output=True, text=True)
+
+        if result.returncode != 0:
+            return None
+
+        with open('/tmp/daily_log.csv', 'r') as f:
+            content = f.read()
+
+        import hashlib
+        return hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+    except Exception as e:
+        print(f"Error getting CSV SHA256: {e}")
+        return None
+
+# Log PV data to S3 using AWS CLI with enhanced audit
 def log_pv_to_s3(pv_data):
     try:
-        # Create log entry
+        # Get timing anchors and CSV integrity
+        t0 = None
+        t1 = None
+        csv_sha256 = None
+
+        try:
+            result = subprocess.run([
+                'aws', 's3', 'cp',
+                f's3://{S3_BUCKET}/signal-dashboard/data/pre_execution.json',
+                '/tmp/pre_execution.json'
+            ], capture_output=True, text=True)
+
+            if result.returncode == 0:
+                with open('/tmp/pre_execution.json', 'r') as f:
+                    pre_exec_data = json.load(f)
+                t0_timestamp = pre_exec_data.get('timestamp_utc')
+                if t0_timestamp:
+                    t0 = t0_timestamp
+        except:
+            pass
+
+        try:
+            t1 = get_baseline_timing_anchor()
+            if t1:
+                t1 = t1.isoformat()
+        except:
+            pass
+
+        csv_sha256 = get_csv_sha256()
+
+        # Create log entry with audit information
         log_entry = {
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'portfolio_value': pv_data['portfolio_value'],
             'daily_pnl': pv_data['daily_pnl'],
-            'total_pnl': pv_data['total_pnl']
+            'total_pnl': pv_data['total_pnl'],
+            'audit': {
+                't0_execution_time': t0,
+                't1_baseline_time': t1,
+                'csv_sha256': csv_sha256,
+                'timing_anchors_valid': validate_time_anchors()
+            }
         }
         
         # Get existing data
@@ -275,10 +497,17 @@ def log_pv_to_s3(pv_data):
         print(f"❌ Error logging to S3: {e}")
         return False
 
-# Main function
+# Main function with Phase 4 enhancements
 def main():
-    print("🚀 Starting Simple PV Logger...")
-    
+    print("🚀 Starting Simple PV Logger with Phase 4: Enhanced Audit and Timing...")
+
+    # Validate time anchors at startup
+    print("🔍 Validating time anchors...")
+    timing_valid = validate_time_anchors()
+    if not timing_valid:
+        print("⚠️ Time anchor validation failed at startup")
+        # Continue anyway but log the issue
+
     # Load baseline
     baseline = load_baseline()
     if not baseline:
