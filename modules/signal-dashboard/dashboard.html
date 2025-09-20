@@ -294,41 +294,34 @@
             }
         }
         
-        // Fetch current mark prices from Binance API (Issue #2 fix)
+        // Load current mark prices from S3 latest_prices.json
         async function fetchCurrentPrices(positions) {
-            const symbols = positions.map(p => (p.ticker || p.ric || p.internal_code).replace('_', ''));
-            console.log('🔍 Fetching mark prices for symbols:', symbols);
-            
-            const promises = symbols.map(symbol => 
-                fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`)
-                    .then(res => {
-                        if (!res.ok) {
-                            throw new Error(`HTTP ${res.status} for ${symbol}`);
-                        }
-                        return res.json();
-                    })
-                    .then(data => {
-                        console.log(`✅ ${symbol}: ${data.markPrice}`);
-                        return { symbol, price: parseFloat(data.markPrice) };
-                    })
-                    .catch(error => {
-                        console.error(`❌ Failed to fetch ${symbol}:`, error);
-                        return { symbol, price: null };
-                    })
-            );
-            
-            const results = await Promise.all(promises);
-            const currentPrices = {};
-            let successCount = 0;
-            results.forEach(({ symbol, price }) => {
-                if (price !== null) {
-                    currentPrices[symbol] = price;
-                    successCount++;
-                }
-            });
-            
-            console.log(`📊 Fetched ${successCount}/${symbols.length} prices successfully`);
-            return currentPrices;
+            try {
+                console.log('🔍 Loading current prices from S3 latest_prices.json...');
+                const response = await fetch('/signal-dashboard/data/latest_prices.json');
+                const data = await response.json();
+
+                const currentPrices = {};
+                const symbols = positions.map(p => (p.ticker || p.ric || p.internal_code).replace('_', ''));
+
+                // Map symbols to prices from S3 data
+                symbols.forEach(symbol => {
+                    const price = data.prices[symbol];
+                    if (price !== undefined && price !== null) {
+                        currentPrices[symbol] = parseFloat(price);
+                        console.log(`✅ ${symbol}: ${price}`);
+                    } else {
+                        console.log(`⚠️ No price for ${symbol}`);
+                        currentPrices[symbol] = null;
+                    }
+                });
+
+                console.log(`📊 Loaded ${Object.keys(currentPrices).length}/${symbols.length} prices from S3`);
+                return currentPrices;
+            } catch (error) {
+                console.error('Error loading current prices from S3:', error);
+                return {};
+            }
         }
 
         // Create new snapshot (single source of truth)
@@ -345,7 +338,7 @@
                 return;
             }
             
-            // Fetch current prices from Binance
+            // Load current prices from S3
             const currentPrices = await fetchCurrentPrices(currentSnapshot.positions);
             console.log('🔍 DEBUG: Fetched currentPrices keys =', Object.keys(currentPrices || {}));
             
