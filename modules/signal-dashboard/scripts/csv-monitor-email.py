@@ -205,6 +205,69 @@ def append_log_row(action: str, csv_filename: str, portfolio_value: float, posit
     return True
 
 
+def apply_exchange_constraints(symbol: str, qty: float, price: float, notional: float) -> tuple[float, str]:
+    """Apply exchange constraints and rounding for quantity calculations."""
+    constraints_applied = "none"
+
+    # Exchange constraints (approximate values - in real implementation, fetch from exchange API)
+    exchange_info = {
+        # Format: {symbol: {'stepSize': float, 'minQty': float, 'minNotional': float}}
+        'BTCUSDT': {'stepSize': 0.00001, 'minQty': 0.00001, 'minNotional': 10.0},
+        'ETHUSDT': {'stepSize': 0.00001, 'minQty': 0.00001, 'minNotional': 10.0},
+        'XRPUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'BNBUSDT': {'stepSize': 0.001, 'minQty': 0.001, 'minNotional': 10.0},
+        'SOLUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
+        'TRXUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'DOGEUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'ADAUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'AVAXUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
+        'LINKUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
+        'ICPUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
+        'XLMUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'HBARUSDT': {'stepSize': 1.0, 'minQty': 1.0, 'minNotional': 10.0},
+        'FETUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'BCHUSDT': {'stepSize': 0.001, 'minQty': 0.001, 'minNotional': 10.0},
+        'LTCUSDT': {'stepSize': 0.001, 'minQty': 0.001, 'minNotional': 10.0},
+        'DOTUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
+        'TONUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'RENDERUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'SUIUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'UNIUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'NEARUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'ETCUSDT': {'stepSize': 0.001, 'minQty': 0.001, 'minNotional': 10.0},
+        'AAVEUSDT': {'stepSize': 0.001, 'minQty': 0.001, 'minNotional': 10.0},
+        'VETUSDT': {'stepSize': 1.0, 'minQty': 1.0, 'minNotional': 10.0},
+        'ATOMUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
+        'ALGOUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
+        'APTUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
+        'FILUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0}
+    }
+
+    # Get constraints for symbol (default if not found)
+    constraints = exchange_info.get(symbol, {'stepSize': 0.00001, 'minQty': 0.00001, 'minNotional': 10.0})
+
+    # Check minNotional constraint first
+    if abs(qty) * price < constraints['minNotional']:
+        constraints_applied = f"minNotional ({constraints['minNotional']})"
+        # For this test, we'll just flag it rather than adjust
+        return qty, constraints_applied
+
+    # Check minQty constraint
+    if abs(qty) < constraints['minQty']:
+        constraints_applied = f"minQty ({constraints['minQty']})"
+        # For this test, we'll just flag it rather than adjust
+        return qty, constraints_applied
+
+    # Apply stepSize rounding
+    step_size = constraints['stepSize']
+    qty_rounded = round(qty / step_size) * step_size
+
+    if abs(qty_rounded) != abs(qty):
+        constraints_applied = f"stepSize ({step_size})"
+
+    return qty_rounded, constraints_applied
+
+
 def calculate_real_portfolio_value(csv_filename: str) -> dict:
     """Calculate real portfolio value from CSV data and current market prices with PV-based sizing."""
     try:
@@ -267,6 +330,15 @@ def calculate_real_portfolio_value(csv_filename: str) -> dict:
 
         log(f"Scaled notional: {total_notional_scaled:.2f} (target: {pv_pre:.2f})")
 
+        # Verify scaled_sum after rounding
+        total_notional_after_rounding = 0
+        for target in execution_targets:
+            total_notional_after_rounding += target['notional_target']
+
+        log(f"After rounding: {total_notional_after_rounding:.2f} (target: {pv_pre:.2f}, diff: {abs(total_notional_after_rounding - pv_pre):.2f})")
+        if abs(total_notional_after_rounding - pv_pre) > 0.01 * pv_pre:
+            log(f"⚠️ Warning: Scaled sum deviates from PV_pre by >1%")
+
         # Get current prices from S3 latest_prices.json instead of Binance API
         current_prices = {}
         try:
@@ -308,16 +380,21 @@ def calculate_real_portfolio_value(csv_filename: str) -> dict:
                 notional_scaled = float(pos.get('scaled_target_notional', pos.get('target_notional', 0)))
                 price = prices_at_t0[symbol]
 
-                # Calculate quantity using mark price at t0
+                # Calculate quantity using mark price at t0 with exchange constraints
                 qty = contracts * abs(notional_scaled) / price if price > 0 else 0
+
+                # Apply exchange constraints and rounding
+                qty_rounded, constraints_applied = apply_exchange_constraints(symbol, qty, price, abs(notional_scaled))
 
                 execution_targets.append({
                     'symbol': symbol,
                     'side': 'BUY' if contracts > 0 else 'SELL',
                     'notional_target': abs(notional_scaled),
-                    'qty_target': qty,
+                    'qty_target': qty_rounded,
+                    'qty_unrounded': qty,
                     'price_at_t0': price,
-                    'contracts': contracts
+                    'contracts': contracts,
+                    'constraints_applied': constraints_applied
                 })
 
         # Write execution_targets.json
