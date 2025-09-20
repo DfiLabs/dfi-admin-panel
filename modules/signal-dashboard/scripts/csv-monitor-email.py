@@ -206,79 +206,147 @@ def append_log_row(action: str, csv_filename: str, portfolio_value: float, posit
 
 
 def calculate_real_portfolio_value(csv_filename: str) -> dict:
-    """Calculate real portfolio value from CSV data and current market prices."""
+    """Calculate real portfolio value from CSV data and current market prices with PV-based sizing."""
     try:
         # Get the CSV content from S3
         s3 = boto3.client('s3')
         csv_key = S3_KEY_PREFIX + csv_filename
         response = s3.get_object(Bucket=S3_BUCKET_NAME, Key=csv_key)
         csv_content = response['Body'].read().decode('utf-8')
-        
+
         lines = csv_content.strip().split('\n')
         if len(lines) < 2:
             return None
-            
+
         headers = lines[0].split(',')
         positions = []
-        
+
         # Parse positions
         for line in lines[1:]:
             values = line.split(',')
             if len(values) >= len(headers):
                 position = dict(zip(headers, values))
                 positions.append(position)
-        
+
         # Calculate total notional and get symbols
-        total_notional = 0
+        csv_total_notional = 0
         symbols = []
         for pos in positions:
             notional = float(pos.get('target_notional', 0))
-            total_notional += notional
+            csv_total_notional += abs(notional)
             symbol = pos.get('ticker', '').replace('_', '')
             if symbol:
                 symbols.append(symbol)
-        
-        # Fetch current prices from Binance
-        import requests
+
+        # Get PV_pre and prices_at_t0 from pre_execution.json
+        pv_pre = 1000000.0  # fallback
+        prices_at_t0 = {}
+        try:
+            pre_exec_text = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'pre_execution.json')['Body'].read().decode('utf-8')
+            pre_exec_data = json.loads(pre_exec_text)
+            pv_pre = float(pre_exec_data.get('pv_pre', 1000000.0))
+            prices_at_t0 = pre_exec_data.get('prices_at_t0', {})
+        except Exception as e:
+            log(f"Error loading pre_execution.json: {e}")
+
+        # Calculate scale factor for PV-based sizing
+        scale = pv_pre / csv_total_notional
+        log(f"PV-based sizing: PV_pre={pv_pre:.2f}, CSV_total={csv_total_notional:.2f}, scale={scale:.4f}")
+
+        # Scale positions to use PV_pre instead of $1M
+        scaled_positions = []
+        total_notional_scaled = 0
+        for pos in positions:
+            original_notional = float(pos.get('target_notional', 0))
+            scaled_notional = abs(original_notional) * scale
+            total_notional_scaled += scaled_notional
+
+            # Keep sign but scale magnitude
+            pos['scaled_target_notional'] = str(scaled_notional if original_notional > 0 else -scaled_notional)
+            scaled_positions.append(pos)
+
+        log(f"Scaled notional: {total_notional_scaled:.2f} (target: {pv_pre:.2f})")
+
+        # Get current prices from S3 latest_prices.json instead of Binance API
         current_prices = {}
-        for symbol in symbols:
-            try:
-                response = requests.get(f'https://api.binance.com/api/v3/ticker/price?symbol={symbol}', timeout=5)
-                if response.status_code == 200:
-                    data = response.json()
-                    current_prices[symbol] = float(data['price'])
-            except:
-                pass
+        try:
+            prices_text = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest_prices.json')['Body'].read().decode('utf-8')
+            prices_data = json.loads(prices_text)
+            current_prices = prices_data.get('prices', {})
+        except Exception as e:
+            log(f"Error loading latest_prices.json: {e}")
+            # Fallback to prices_at_t0 if available
+            current_prices = prices_at_t0
         
-        # Calculate real P&L
+        # Calculate real P&L using scaled notional and baseline prices
         total_pnl = 0
         for pos in positions:
             symbol = pos.get('ticker', '').replace('_', '')
-            entry_price = float(pos.get('ref_price', 0))
-            notional = float(pos.get('target_notional', 0))
+            baseline_price = float(pos.get('ref_price', 0))  # Use ref_price as baseline
+            notional = float(pos.get('scaled_target_notional', pos.get('target_notional', 0)))  # Use scaled notional
             contracts = float(pos.get('target_contracts', 0))
-            
-            if symbol in current_prices and entry_price > 0:
+
+            if symbol in current_prices and baseline_price > 0:
                 current_price = current_prices[symbol]
-                side = 'LONG' if contracts > 0 else 'SHORT'
-                
-                if side == 'LONG':
-                    pnl = (current_price - entry_price) / entry_price * notional
-                else:
-                    pnl = (entry_price - current_price) / entry_price * notional
-                
+                side_multiplier = 1 if contracts > 0 else -1  # 1 for long, -1 for short
+
+                # Use same P&L formula as dashboard: percentage change * notional
+                pnl = side_multiplier * (current_price - baseline_price) / baseline_price * abs(notional)
                 total_pnl += pnl
-        
-        initial_capital = 1000000.0
-        portfolio_value = initial_capital + total_pnl
-        
+
+        # Portfolio Value = PV_pre + Daily P&L (PV_pre-based sizing)
+        portfolio_value = pv_pre + total_pnl
+
+        log(f"P&L calculation: PV_pre={pv_pre:.2f}, total_pnl={total_pnl:.2f}, PV={portfolio_value:.2f}")
+
+        # Create execution_targets.json with scaled contracts
+        execution_targets = []
+        for pos in positions:
+            symbol = pos.get('ticker', '').replace('_', '')
+            if symbol in prices_at_t0 and prices_at_t0[symbol] > 0:
+                contracts = float(pos.get('target_contracts', 0))
+                notional_scaled = float(pos.get('scaled_target_notional', pos.get('target_notional', 0)))
+                price = prices_at_t0[symbol]
+
+                # Calculate quantity using mark price at t0
+                qty = contracts * abs(notional_scaled) / price if price > 0 else 0
+
+                execution_targets.append({
+                    'symbol': symbol,
+                    'side': 'BUY' if contracts > 0 else 'SELL',
+                    'notional_target': abs(notional_scaled),
+                    'qty_target': qty,
+                    'price_at_t0': price,
+                    'contracts': contracts
+                })
+
+        # Write execution_targets.json
+        try:
+            execution_data = {
+                'timestamp_utc': t0,
+                'csv_filename': csv_filename,
+                'pv_pre': pv_pre,
+                'targets': execution_targets
+            }
+            s3.put_object(
+                Bucket=S3_BUCKET_NAME,
+                Key=S3_KEY_PREFIX + 'execution_targets.json',
+                Body=json.dumps(execution_data).encode('utf-8'),
+                ContentType='application/json',
+                CacheControl='no-store'
+            )
+            log(f"Wrote execution_targets.json with {len(execution_targets)} targets")
+        except Exception as e:
+            log(f"Error writing execution_targets.json: {e}")
+
         return {
             'portfolio_value': portfolio_value,
             'daily_pnl': total_pnl,  # This will be calculated as difference from previous day
-            'total_notional': total_notional,
+            'total_notional': total_notional_scaled,
             'positions_count': len(positions),
             'current_prices': current_prices,
-            'positions': positions  # Add positions for timeseries writer
+            'positions': positions,  # Add positions for timeseries writer
+            'scaled_positions': scaled_positions
         }
         
     except Exception as e:
@@ -884,7 +952,59 @@ def main() -> None:
             if csv_sha256 == last_executed_sha256:
                 log(f"Skipping duplicate CSV {latest} (same SHA256)")
                 continue
-            
+
+            # 1) PRE-EXECUTION SNAPSHOT: Create pre_execution.json with PV_pre and mark prices at t0
+            t0 = datetime.datetime.utcnow().isoformat()
+            log(f"Creating pre-execution snapshot at {t0}")
+
+            # Get PV_pre (last PV from portfolio_value_log.jsonl before t0)
+            pv_pre = None
+            try:
+                s3 = boto3.client('s3')
+                pv_log_text = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'portfolio_value_log.jsonl')['Body'].read().decode('utf-8')
+                lines = [l for l in pv_log_text.strip().split('\n') if l]
+                if lines:
+                    for line in reversed(lines):
+                        r = json.loads(line)
+                        ts = datetime.datetime.fromisoformat(r["timestamp"])
+                        if ts < datetime.datetime.utcnow():
+                            pv_pre = r["portfolio_value"]
+                            break
+                    if pv_pre is None:
+                        pv_pre = float(json.loads(lines[-1])["portfolio_value"])  # fallback
+            except Exception as e:
+                log(f"Error getting PV_pre: {e}")
+                pv_pre = 1000000.0  # fallback
+
+            # Get mark prices at t0 from S3 latest_prices.json
+            prices_at_t0 = {}
+            try:
+                prices_text = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest_prices.json')['Body'].read().decode('utf-8')
+                prices_data = json.loads(prices_text)
+                prices_at_t0 = prices_data.get('prices', {})
+            except Exception as e:
+                log(f"Error getting prices at t0: {e}")
+
+            # Write pre_execution.json
+            pre_execution_data = {
+                'timestamp_utc': t0,
+                'csv_filename': latest,
+                'csv_sha256': csv_sha256,
+                'pv_pre': pv_pre,
+                'prices_at_t0': prices_at_t0
+            }
+            try:
+                s3.put_object(
+                    Bucket=S3_BUCKET_NAME,
+                    Key=S3_KEY_PREFIX + 'pre_execution.json',
+                    Body=json.dumps(pre_execution_data).encode('utf-8'),
+                    ContentType='application/json',
+                    CacheControl='no-store'
+                )
+                log(f"Wrote pre_execution.json with PV_pre={pv_pre:.2f}")
+            except Exception as e:
+                log(f"Error writing pre_execution.json: {e}")
+
             # Remember previous latest from S3 before we switch
             prev_latest = read_current_latest_json()
             pre_exec_data = None
