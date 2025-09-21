@@ -547,11 +547,13 @@
         }
 
         function populatePositionTable(tableId, positions, snapshot, referenceCapital) {
+            console.log('🔍 populatePositionTable called with refCap fix, positions:', positions.length);
             const tbody = document.getElementById(tableId);
             tbody.innerHTML = '';
 
             // Use fixed reference capital of $1,000,000 for calculations
             const refCap = initialCapital;
+            console.log('🔍 Using fixed refCap:', refCap);
 
             positions.forEach(position => {
                 const symbol = position.ticker || position.ric || position.internal_code || 'N/A';
