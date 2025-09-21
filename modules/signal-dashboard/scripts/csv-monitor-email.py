@@ -425,6 +425,53 @@ def write_daily_baseline_json(csv_filename: str, portfolio_value: float, prices:
         return False
 
 
+def write_pre_execution_json(csv_filename: str, csv_sha256: str) -> bool:
+    """Write pre_execution.json at CSV detection time (no execution).
+
+    Shape:
+    {
+      "timestamp_utc": <detection_time_iso>,
+      "csv_filename": "...",
+      "csv_sha256": "...",
+      "pv_pre_time": "TBD",
+      "pv_pre": null,
+      "prices_at_t0": { ... }
+    }
+    """
+    try:
+        s3 = boto3.client('s3')
+        # Load latest marks to snapshot at detection time
+        prices = {}
+        try:
+            latest_obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest_prices.json')
+            latest = json.loads(latest_obj['Body'].read().decode('utf-8'))
+            prices = latest.get('prices', {}) or {}
+        except Exception as e:
+            log(f"WARN: failed to read latest_prices.json for pre_execution snapshot: {e}")
+            prices = {}
+
+        payload = {
+            'timestamp_utc': datetime.datetime.utcnow().isoformat(),
+            'csv_filename': csv_filename,
+            'csv_sha256': csv_sha256,
+            'pv_pre_time': 'TBD',
+            'pv_pre': None,
+            'prices_at_t0': prices
+        }
+        s3.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=S3_KEY_PREFIX + 'pre_execution.json',
+            Body=json.dumps(payload).encode('utf-8'),
+            ContentType='application/json',
+            CacheControl='no-store'
+        )
+        log('pre_execution.json written (snapshot at CSV detection, no execution)')
+        return True
+    except Exception as e:
+        log(f'Failed to write pre_execution.json: {e}')
+        return False
+
+
 def compute_csv_sha256(csv_content: str) -> str:
     """Compute SHA256 hash of CSV content for idempotency."""
     return hashlib.sha256(csv_content.encode('utf-8')).hexdigest()
@@ -955,6 +1002,13 @@ def main() -> None:
             # 3) Update latest.json for the dashboard to discover new file
             ok_latest = write_latest_json(latest)
             log(f"📄 ok_latest = {ok_latest} (latest.json write result)")
+
+            # 3b) Write pre_execution.json snapshot and EXIT early (no execution now)
+            write_pre_execution_json(latest, csv_sha256)
+            last_processed = latest
+            last_executed_sha256 = csv_sha256
+            log('⏹️ Detection pipeline complete (pre_execution.json written); deferring execution to scheduled time')
+            continue
 
             # 4) POST-EXECUTION LOG using new CSV; compute daily vs pre if we logged it
             post_ok = False
