@@ -39,6 +39,9 @@ S3_BUCKET_NAME = 'dfi-signal-dashboard'
 S3_KEY_PREFIX = 'signal-dashboard/data/'
 S3_DASHBOARD_KEY = 'signal-dashboard/dashboard.html'
 
+# detector-only switches
+PV_WRITER_ENABLED = os.getenv("PV_WRITER_ENABLED", "0") == "1"  # default OFF
+
 
 def log(msg: str) -> None:
     ts = datetime.datetime.now().isoformat(timespec='seconds')
@@ -100,20 +103,45 @@ def upload_csv_to_s3(local_path: str, filename: str) -> bool:
 
 
 def update_dashboard_html_on_s3(new_csv_filename: str) -> bool:
+    """Lightweight: stamp CSV name/time into dashboard HTML without embedding CSV."""
     s3 = boto3.client('s3')
     try:
         resp = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_DASHBOARD_KEY)
         html = resp['Body'].read().decode('utf-8')
-        local_csv = os.path.join('/tmp', new_csv_filename)
-        with open(local_csv, 'r') as f:
-            csv_text = f.read()
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
         import re
-        html = re.sub(r"const csvData = `[^`]*`;", f"const csvData = `{csv_text.strip()}`;", html, flags=re.DOTALL)
-        html = re.sub(r"id=\"csv-timestamp\">[^<]*<", f"id=\"csv-timestamp\">(loaded: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')})<", html)
+        changed = False
 
-        s3.put_object(Bucket=S3_BUCKET_NAME, Key=S3_DASHBOARD_KEY, Body=html.encode('utf-8'), ContentType='text/html', CacheControl='no-cache')
-        log("Dashboard updated on S3")
+        # Replace existing <span id="csv-name">…</span>
+        if re.search(r'id="csv-name">', html):
+            html = re.sub(r'id="csv-name">[^<]*<', f'id="csv-name">{new_csv_filename}<', html)
+            changed = True
+
+        # Replace existing <span id="csv-timestamp">…</span>
+        if re.search(r'id="csv-timestamp">', html):
+            html = re.sub(r'id="csv-timestamp">[^<]*<', f'id="csv-timestamp">(loaded: {now_iso})<', html)
+            changed = True
+
+        # If markers are missing, inject a tiny banner before </body>
+        if not changed:
+            banner = (
+                f'<div style="font:14px/1.4 system-ui,sans-serif;background:#f6f7fb;border:1px solid #e2e6f0;padding:8px 12px;border-radius:8px;display:inline-block;margin:8px 0;">📊 '
+                f'<span id="csv-name">{new_csv_filename}</span> '
+                f'<span id="csv-timestamp">(loaded: {now_iso})</span>'
+                f'</div>'
+            )
+            html = re.sub(r'</body>', banner + '\n</body>', html, flags=re.IGNORECASE)
+
+        s3.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=S3_DASHBOARD_KEY,
+            Body=html.encode('utf-8'),
+            ContentType='text/html',
+            CacheControl='no-cache'
+        )
+        log("Dashboard stamped with CSV name/time")
         return True
     except Exception as e:
         log(f"Dashboard update failed: {e}")
@@ -126,7 +154,8 @@ def write_latest_json(filename: str) -> bool:
     import json
     payload = {
         'filename': filename,
-        'updated_utc': datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        'latest_csv': filename,
+        'updated_utc': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     }
     try:
         s3.put_object(
@@ -935,9 +964,12 @@ def main() -> None:
 
     log("📧 EmailNotifier initialized")
 
-    # Start the continuous time series writer
-    continuous_timeseries_writer()
-    log("⚡ Timeseries writer started")
+    # Start the continuous time series writer (guarded)
+    if PV_WRITER_ENABLED:
+        continuous_timeseries_writer()
+        log("⚡ Timeseries writer started (PV_WRITER_ENABLED=1)")
+    else:
+        log("🛑 Detector-only: PV writer disabled (PV_WRITER_ENABLED=0)")
 
     # helper to know if we are within the nightly window (23:55 → 01:25 UTC)
     def compute_in_window(now_utc: datetime.datetime) -> bool:
