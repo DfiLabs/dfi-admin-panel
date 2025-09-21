@@ -17,6 +17,9 @@ S3_BUCKET = "dfi-signal-dashboard"
 S3_KEY = "signal-dashboard/data/portfolio_value_log.jsonl"
 BINANCE_API = "https://api.binance.com/api/v3/ticker/price"
 
+# Module-level PV_pre (updated when daily_baseline.json is refreshed)
+pv_pre = 1_000_000.0
+
 # Load baseline data using AWS CLI
 def load_baseline():
     try:
@@ -29,6 +32,13 @@ def load_baseline():
         if result.returncode == 0:
             with open('/tmp/baseline.json', 'r') as f:
                 baseline = json.load(f)
+            # Update module-level pv_pre if provided
+            try:
+                global pv_pre
+                if 'pv_pre' in baseline and baseline['pv_pre']:
+                    pv_pre = float(baseline['pv_pre'])
+            except Exception:
+                pass
             return baseline
         else:
             print(f"Error loading baseline: {result.stderr}")
@@ -37,26 +47,25 @@ def load_baseline():
         print(f"Error loading baseline: {e}")
         return None
 
-# Get current prices from Binance
+# Get current prices from S3 latest_prices.json (single source of truth)
 def get_current_prices(symbols):
-    import ssl
-    prices = {}
-    
-    # Create SSL context that doesn't verify certificates
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-    
-    for symbol in symbols:
-        try:
-            url = f"{BINANCE_API}?symbol={symbol}"
-            request = urllib.request.Request(url)
-            with urllib.request.urlopen(request, context=ssl_context) as response:
-                data = json.loads(response.read())
-                prices[symbol] = float(data['price'])
-        except Exception as e:
-            print(f"Error fetching price for {symbol}: {e}")
-    return prices
+    try:
+        result = subprocess.run([
+            'aws', 's3', 'cp',
+            f's3://{S3_BUCKET}/signal-dashboard/data/latest_prices.json',
+            '/tmp/latest_prices.json'
+        ], capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Error loading latest_prices.json: {result.stderr}")
+            return {}
+        with open('/tmp/latest_prices.json', 'r') as f:
+            data = json.load(f)
+        prices_all = data.get('prices', {}) or {}
+        # Filter to symbols we care about
+        return {s: float(prices_all[s]) for s in symbols if s in prices_all}
+    except Exception as e:
+        print(f"Error loading current prices from S3: {e}")
+        return {}
 
 # Get prior cumulative P&L using pre_execution.json timestamp as t0 anchor
 def get_prior_cumulative_pnl():
@@ -357,8 +366,9 @@ def calculate_portfolio_value(baseline, current_prices):
         print("⚠️ Time anchor validation failed")
         # Continue anyway but log the issue
 
-    # Get prior cumulative P&L using t0 timing anchor
-    prior_cumulative = get_prior_cumulative_pnl()
+    # Prior cumulative derived from pv_pre (cumulative since inception)
+    global pv_pre
+    prior_cumulative = pv_pre - 1_000_000.0
 
     # Load the current CSV to get actual positions
     try:
@@ -435,11 +445,10 @@ def calculate_portfolio_value(baseline, current_prices):
 
         print(f"📊 Processed {processed_count} positions")
 
-        # Calculate accumulated Total P&L
-        total_pnl = prior_cumulative + daily_pnl
-
-        # Portfolio Value = $1M + Total P&L (accumulated, not just daily)
-        portfolio_value = 1000000 + total_pnl
+        # Portfolio Value = pv_pre + Daily P&L
+        portfolio_value = pv_pre + daily_pnl
+        # Total P&L = Portfolio Value - $1,000,000
+        total_pnl = portfolio_value - 1_000_000.0
 
         print(f"📊 Prior Cumulative P&L: ${prior_cumulative:.2f}")
         print(f"📊 Today's Daily P&L: ${daily_pnl:.2f}")
