@@ -22,7 +22,9 @@ except Exception:
 # Import email notifier with safe fallback
 try:
     from email_notifier import EmailNotifier  # type: ignore
-except Exception:
+    log("✅ EmailNotifier imported successfully from email_notifier.py")
+except Exception as e:
+    log(f"❌ EmailNotifier import failed: {e}")
     class EmailNotifier:  # type: ignore
         def send_once_per_day(self, subject: str, html: str) -> None:
             log(f"Email notifier unavailable. Would have sent: {subject}")
@@ -205,229 +207,103 @@ def append_log_row(action: str, csv_filename: str, portfolio_value: float, posit
     return True
 
 
-def apply_exchange_constraints(symbol: str, qty: float, price: float, notional: float) -> tuple[float, str]:
-    """Apply exchange constraints and rounding for quantity calculations."""
-    constraints_applied = "none"
-
-    # Exchange constraints (approximate values - in real implementation, fetch from exchange API)
-    exchange_info = {
-        # Format: {symbol: {'stepSize': float, 'minQty': float, 'minNotional': float}}
-        'BTCUSDT': {'stepSize': 0.00001, 'minQty': 0.00001, 'minNotional': 10.0},
-        'ETHUSDT': {'stepSize': 0.00001, 'minQty': 0.00001, 'minNotional': 10.0},
-        'XRPUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'BNBUSDT': {'stepSize': 0.001, 'minQty': 0.001, 'minNotional': 10.0},
-        'SOLUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
-        'TRXUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'DOGEUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'ADAUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'AVAXUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
-        'LINKUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
-        'ICPUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
-        'XLMUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'HBARUSDT': {'stepSize': 1.0, 'minQty': 1.0, 'minNotional': 10.0},
-        'FETUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'BCHUSDT': {'stepSize': 0.001, 'minQty': 0.001, 'minNotional': 10.0},
-        'LTCUSDT': {'stepSize': 0.001, 'minQty': 0.001, 'minNotional': 10.0},
-        'DOTUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
-        'TONUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'RENDERUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'SUIUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'UNIUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'NEARUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'ETCUSDT': {'stepSize': 0.001, 'minQty': 0.001, 'minNotional': 10.0},
-        'AAVEUSDT': {'stepSize': 0.001, 'minQty': 0.001, 'minNotional': 10.0},
-        'VETUSDT': {'stepSize': 1.0, 'minQty': 1.0, 'minNotional': 10.0},
-        'ATOMUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
-        'ALGOUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0},
-        'APTUSDT': {'stepSize': 0.01, 'minQty': 0.01, 'minNotional': 10.0},
-        'FILUSDT': {'stepSize': 0.1, 'minQty': 0.1, 'minNotional': 10.0}
-    }
-
-    # Get constraints for symbol (default if not found)
-    constraints = exchange_info.get(symbol, {'stepSize': 0.00001, 'minQty': 0.00001, 'minNotional': 10.0})
-
-    # Check minNotional constraint first
-    if abs(qty) * price < constraints['minNotional']:
-        constraints_applied = f"minNotional ({constraints['minNotional']})"
-        # For this test, we'll just flag it rather than adjust
-        return qty, constraints_applied
-
-    # Check minQty constraint
-    if abs(qty) < constraints['minQty']:
-        constraints_applied = f"minQty ({constraints['minQty']})"
-        # For this test, we'll just flag it rather than adjust
-        return qty, constraints_applied
-
-    # Apply stepSize rounding
-    step_size = constraints['stepSize']
-    qty_rounded = round(qty / step_size) * step_size
-
-    if abs(qty_rounded) != abs(qty):
-        constraints_applied = f"stepSize ({step_size})"
-
-    return qty_rounded, constraints_applied
-
-
 def calculate_real_portfolio_value(csv_filename: str) -> dict:
-    """Calculate real portfolio value from CSV data and current market prices with PV-based sizing."""
+    """Calculate real portfolio value from CSV data and current market prices."""
     try:
         # Get the CSV content from S3
         s3 = boto3.client('s3')
         csv_key = S3_KEY_PREFIX + csv_filename
         response = s3.get_object(Bucket=S3_BUCKET_NAME, Key=csv_key)
         csv_content = response['Body'].read().decode('utf-8')
-
+        
         lines = csv_content.strip().split('\n')
         if len(lines) < 2:
             return None
-
+            
         headers = lines[0].split(',')
         positions = []
-
+        
         # Parse positions
         for line in lines[1:]:
             values = line.split(',')
             if len(values) >= len(headers):
                 position = dict(zip(headers, values))
                 positions.append(position)
-
+        
         # Calculate total notional and get symbols
-        csv_total_notional = 0
+        total_notional = 0
         symbols = []
         for pos in positions:
-            notional = float(pos.get('target_notional', 0))
-            csv_total_notional += abs(notional)
-            symbol = pos.get('ticker', '').replace('_', '')
-            if symbol:
-                symbols.append(symbol)
-
-        # Get PV_pre and prices_at_t0 from pre_execution.json
-        pv_pre = 1000000.0  # fallback
-        prices_at_t0 = {}
-        try:
-            pre_exec_text = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'pre_execution.json')['Body'].read().decode('utf-8')
-            pre_exec_data = json.loads(pre_exec_text)
-            pv_pre = float(pre_exec_data.get('pv_pre', 1000000.0))
-            prices_at_t0 = pre_exec_data.get('prices_at_t0', {})
-        except Exception as e:
-            log(f"Error loading pre_execution.json: {e}")
-
-        # Calculate scale factor for PV-based sizing
-        scale = pv_pre / csv_total_notional
-        log(f"PV-based sizing: PV_pre={pv_pre:.2f}, CSV_total={csv_total_notional:.2f}, scale={scale:.4f}")
-
-        # Scale positions to use PV_pre instead of $1M
-        scaled_positions = []
-        total_notional_scaled = 0
-        for pos in positions:
-            original_notional = float(pos.get('target_notional', 0))
-            scaled_notional = abs(original_notional) * scale
-            total_notional_scaled += scaled_notional
-
-            # Keep sign but scale magnitude
-            pos['scaled_target_notional'] = str(scaled_notional if original_notional > 0 else -scaled_notional)
-            scaled_positions.append(pos)
-
-        log(f"Scaled notional: {total_notional_scaled:.2f} (target: {pv_pre:.2f})")
-
-        # Verify scaled_sum after rounding
-        total_notional_after_rounding = 0
-        for target in execution_targets:
-            total_notional_after_rounding += target['notional_target']
-
-        log(f"After rounding: {total_notional_after_rounding:.2f} (target: {pv_pre:.2f}, diff: {abs(total_notional_after_rounding - pv_pre):.2f})")
-        if abs(total_notional_after_rounding - pv_pre) > 0.01 * pv_pre:
-            log(f"⚠️ Warning: Scaled sum deviates from PV_pre by >1%")
-
-        # Get current prices from S3 latest_prices.json instead of Binance API
-        current_prices = {}
-        try:
-            prices_text = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest_prices.json')['Body'].read().decode('utf-8')
-            prices_data = json.loads(prices_text)
-            current_prices = prices_data.get('prices', {})
-        except Exception as e:
-            log(f"Error loading latest_prices.json: {e}")
-            # Fallback to prices_at_t0 if available
-            current_prices = prices_at_t0
+            try:
+                notional_str = pos.get('target_notional', '0')
+                notional = float(notional_str) if notional_str else 0.0
+                total_notional += notional
+                symbol = pos.get('ticker', '').replace('_', '')
+                if symbol:
+                    symbols.append(symbol)
+            except (ValueError, TypeError) as e:
+                log(f"Error parsing position data: {e}, position: {pos}")
+                continue
         
-        # Calculate real P&L using scaled notional and baseline prices
+        # Fetch current prices from Binance
+        import requests
+        current_prices = {}
+        for symbol in symbols:
+            try:
+                response = requests.get(f'https://api.binance.com/api/v3/ticker/price?symbol={symbol}', timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    current_prices[symbol] = float(data['price'])
+            except:
+                pass
+        
+        # Calculate real P&L
         total_pnl = 0
         for pos in positions:
-            symbol = pos.get('ticker', '').replace('_', '')
-            baseline_price = float(pos.get('ref_price', 0))  # Use ref_price as baseline
-            notional = float(pos.get('scaled_target_notional', pos.get('target_notional', 0)))  # Use scaled notional
-            contracts = float(pos.get('target_contracts', 0))
+            try:
+                symbol = pos.get('ticker', '').replace('_', '')
+                entry_price_str = pos.get('ref_price', '0')
+                notional_str = pos.get('target_notional', '0')
+                contracts_str = pos.get('target_contracts', '0')
 
-            if symbol in current_prices and baseline_price > 0:
-                current_price = current_prices[symbol]
-                side_multiplier = 1 if contracts > 0 else -1  # 1 for long, -1 for short
+                entry_price = float(entry_price_str) if entry_price_str else 0.0
+                notional = float(notional_str) if notional_str else 0.0
+                contracts = float(contracts_str) if contracts_str else 0.0
 
-                # Use same P&L formula as dashboard: percentage change * notional
-                pnl = side_multiplier * (current_price - baseline_price) / baseline_price * abs(notional)
-                total_pnl += pnl
+                if symbol in current_prices and entry_price > 0:
+                    current_price = current_prices[symbol]
+                    side = 'LONG' if contracts > 0 else 'SHORT'
 
-        # Portfolio Value = PV_pre + Daily P&L (PV_pre-based sizing)
-        portfolio_value = pv_pre + total_pnl
+                    if side == 'LONG':
+                        pnl = (current_price - entry_price) / entry_price * notional
+                    else:
+                        pnl = (entry_price - current_price) / entry_price * notional
 
-        log(f"P&L calculation: PV_pre={pv_pre:.2f}, total_pnl={total_pnl:.2f}, PV={portfolio_value:.2f}")
-
-        # Create execution_targets.json with scaled contracts
-        execution_targets = []
-        for pos in positions:
-            symbol = pos.get('ticker', '').replace('_', '')
-            if symbol in prices_at_t0 and prices_at_t0[symbol] > 0:
-                contracts = float(pos.get('target_contracts', 0))
-                notional_scaled = float(pos.get('scaled_target_notional', pos.get('target_notional', 0)))
-                price = prices_at_t0[symbol]
-
-                # Calculate quantity using mark price at t0 with exchange constraints
-                qty = contracts * abs(notional_scaled) / price if price > 0 else 0
-
-                # Apply exchange constraints and rounding
-                qty_rounded, constraints_applied = apply_exchange_constraints(symbol, qty, price, abs(notional_scaled))
-
-                execution_targets.append({
-                    'symbol': symbol,
-                    'side': 'BUY' if contracts > 0 else 'SELL',
-                    'notional_target': abs(notional_scaled),
-                    'qty_target': qty_rounded,
-                    'qty_unrounded': qty,
-                    'price_at_t0': price,
-                    'contracts': contracts,
-                    'constraints_applied': constraints_applied
-                })
-
-        # Write execution_targets.json
-        try:
-            execution_data = {
-                'timestamp_utc': t0,
-                'csv_filename': csv_filename,
-                'pv_pre': pv_pre,
-                'targets': execution_targets
-            }
-            s3.put_object(
-                Bucket=S3_BUCKET_NAME,
-                Key=S3_KEY_PREFIX + 'execution_targets.json',
-                Body=json.dumps(execution_data).encode('utf-8'),
-                ContentType='application/json',
-                CacheControl='no-store'
-            )
-            log(f"Wrote execution_targets.json with {len(execution_targets)} targets")
-        except Exception as e:
-            log(f"Error writing execution_targets.json: {e}")
-
+                    total_pnl += pnl
+            except (ValueError, TypeError, ZeroDivisionError) as e:
+                log(f"Error calculating P&L for position: {e}, position: {pos}")
+                continue
+        
+        initial_capital = 1000000.0
+        portfolio_value = initial_capital + total_pnl
+        
         return {
             'portfolio_value': portfolio_value,
             'daily_pnl': total_pnl,  # This will be calculated as difference from previous day
-            'total_notional': total_notional_scaled,
+            'total_notional': total_notional,
             'positions_count': len(positions),
             'current_prices': current_prices,
-            'positions': positions,  # Add positions for timeseries writer
-            'scaled_positions': scaled_positions
+            'positions': positions  # Add positions for timeseries writer
         }
-        
+
     except Exception as e:
         log(f"Error calculating portfolio value: {e}")
+        log(f"CSV filename: {csv_filename}")
+        log(f"Number of positions parsed: {len(positions)}")
+        log(f"Total notional calculated: {total_notional}")
+        log(f"Current prices fetched: {len(current_prices)}")
+        import traceback
+        log(f"Traceback: {traceback.format_exc()}")
         return None
 
 
@@ -454,7 +330,8 @@ def create_or_update_portfolio_log(csv_filename: str) -> bool:
                 'portfolio_value': 1000000.0,
                 'daily_pnl': 0.0,
                 'total_notional': 1000000.0,
-                'positions_count': 29
+                'positions_count': 29,
+                'current_prices': {}
             }
         
         now = datetime.datetime.utcnow()
@@ -524,6 +401,7 @@ def create_or_update_portfolio_log(csv_filename: str) -> bool:
 
 def write_daily_baseline_json(csv_filename: str, portfolio_value: float, prices: dict) -> bool:
     """Write the post-execution daily baseline snapshot for UI daily P&L reset."""
+    log(f"🎯 write_daily_baseline_json called with: {csv_filename}, portfolio_value={portfolio_value}, prices_keys={len(prices) if prices else 0}")
     try:
         s3 = boto3.client('s3')
         import json
@@ -640,6 +518,7 @@ def format_csv_trades_for_email(csv_content: str) -> str:
 
 def write_local_execution_trace(csv_filename: str, execution_id: str, csv_sha256: str, last_executed_sha256: str, pre_exec_data: dict = None, post_exec_data: dict = None, baseline_data: dict = None, first_tick_data: dict = None, rolling_ticks: list = None, errors: list = None, warnings: list = None) -> bool:
     """Write local execution trace to ops directory."""
+    log(f"📝 write_local_execution_trace called with: csv={csv_filename}, exec_id={execution_id[:8]}..., pre_exec={pre_exec_data is not None}, post_exec={post_exec_data is not None}, baseline={baseline_data is not None}")
     try:
         today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
         trace_filename = f'local-execution-trace-{today}.txt'
@@ -1000,87 +879,41 @@ def continuous_timeseries_writer() -> None:
 
 
 def main() -> None:
+    log("🚀 Starting CSV monitoring script...")
     notifier = EmailNotifier()
     last_processed = None
     last_executed_sha256 = None
-    
+
+    log("📧 EmailNotifier initialized")
+
     # Start the continuous time series writer
     continuous_timeseries_writer()
+    log("⚡ Timeseries writer started")
 
     while True:
         latest = get_latest_2355()
         if latest and latest != last_processed:
-            log(f"Detected new CSV: {latest}")
-            
+            log(f"🔍 Detected new CSV: {latest}")
+
             # Generate execution ID and compute CSV SHA256 for idempotency
             execution_id = str(uuid.uuid4())
-            
+            log(f"🆔 Generated execution ID: {execution_id}")
+
             # Read CSV content to compute SHA256
             tmp_path = copy_with_sudo_to_tmp(latest)
             if not tmp_path:
-                log(f"Failed to copy CSV {latest}")
+                log(f"❌ Failed to copy CSV {latest}")
                 continue
-                
+
             with open(tmp_path, 'r') as f:
                 csv_content = f.read()
             csv_sha256 = compute_csv_sha256(csv_content)
+            log(f"📄 CSV SHA256: {csv_sha256}")
             
             # Check idempotency
             if csv_sha256 == last_executed_sha256:
-                log(f"Skipping duplicate CSV {latest} (same SHA256)")
+                log(f"⏭️ Skipping duplicate CSV {latest} (same SHA256)")
                 continue
-
-            # 1) PRE-EXECUTION SNAPSHOT: Create pre_execution.json with PV_pre and mark prices at t0
-            t0 = datetime.datetime.utcnow().isoformat()
-            log(f"Creating pre-execution snapshot at {t0}")
-
-            # Get PV_pre (last PV from portfolio_value_log.jsonl before t0)
-            pv_pre = None
-            try:
-                s3 = boto3.client('s3')
-                pv_log_text = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'portfolio_value_log.jsonl')['Body'].read().decode('utf-8')
-                lines = [l for l in pv_log_text.strip().split('\n') if l]
-                if lines:
-                    for line in reversed(lines):
-                        r = json.loads(line)
-                        ts = datetime.datetime.fromisoformat(r["timestamp"])
-                        if ts < datetime.datetime.utcnow():
-                            pv_pre = r["portfolio_value"]
-                            break
-                    if pv_pre is None:
-                        pv_pre = float(json.loads(lines[-1])["portfolio_value"])  # fallback
-            except Exception as e:
-                log(f"Error getting PV_pre: {e}")
-                pv_pre = 1000000.0  # fallback
-
-            # Get mark prices at t0 from S3 latest_prices.json
-            prices_at_t0 = {}
-            try:
-                prices_text = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest_prices.json')['Body'].read().decode('utf-8')
-                prices_data = json.loads(prices_text)
-                prices_at_t0 = prices_data.get('prices', {})
-            except Exception as e:
-                log(f"Error getting prices at t0: {e}")
-
-            # Write pre_execution.json
-            pre_execution_data = {
-                'timestamp_utc': t0,
-                'csv_filename': latest,
-                'csv_sha256': csv_sha256,
-                'pv_pre': pv_pre,
-                'prices_at_t0': prices_at_t0
-            }
-            try:
-                s3.put_object(
-                    Bucket=S3_BUCKET_NAME,
-                    Key=S3_KEY_PREFIX + 'pre_execution.json',
-                    Body=json.dumps(pre_execution_data).encode('utf-8'),
-                    ContentType='application/json',
-                    CacheControl='no-store'
-                )
-                log(f"Wrote pre_execution.json with PV_pre={pv_pre:.2f}")
-            except Exception as e:
-                log(f"Error writing pre_execution.json: {e}")
 
             # Remember previous latest from S3 before we switch
             prev_latest = read_current_latest_json()
@@ -1088,6 +921,7 @@ def main() -> None:
             post_exec_data = None
             baseline_data = None
             errors = []
+            log(f"📋 Initialized processing variables")
 
             # 0) PRE-EXECUTION LOG (use previous CSV if available)
             if prev_latest:
@@ -1116,13 +950,16 @@ def main() -> None:
 
             # 2) Update dashboard (optional legacy step)
             ok_dash = ok_upload and update_dashboard_html_on_s3(latest)
+            log(f"📊 ok_dash = {ok_dash} (upload: {ok_upload}, dashboard_update: {update_dashboard_html_on_s3(latest)})")
 
             # 3) Update latest.json for the dashboard to discover new file
             ok_latest = write_latest_json(latest)
-            
+            log(f"📄 ok_latest = {ok_latest} (latest.json write result)")
+
             # 4) POST-EXECUTION LOG using new CSV; compute daily vs pre if we logged it
             post_ok = False
             post_data = calculate_real_portfolio_value(latest) if ok_upload else None
+            log(f"💰 post_data calculation: {post_data is not None}")
             if post_data:
                 post_exec_data = {
                     'timestamp': datetime.datetime.utcnow().isoformat(),
@@ -1188,8 +1025,13 @@ def main() -> None:
             )
 
             # 7) If all good, send email once per day
-            if ok_dash and ok_latest and post_ok:
+            email_conditions = ok_dash and ok_latest and post_ok
+            log(f"📧 Email conditions: ok_dash={ok_dash}, ok_latest={ok_latest}, post_ok={post_ok}")
+            log(f"📧 Will send email: {email_conditions}")
+
+            if email_conditions:
                 subject = f"📊 Signal Dashboard: Daily Execution Summary ({latest})"
+                log(f"📧 Email subject: {subject}")
                 
                 # Format trades table from CSV
                 trades_table = format_csv_trades_for_email(csv_content)
@@ -1251,9 +1093,18 @@ def main() -> None:
                 </body>
                 </html>
                 """
+                log(f"📧 Attempting to send email...")
                 notifier.send_once_per_day(subject, html)
+                log(f"✅ Email sent successfully for {latest}")
                 last_processed = latest
                 last_executed_sha256 = csv_sha256
+            else:
+                log(f"❌ Email NOT sent - conditions not met: ok_dash={ok_dash}, ok_latest={ok_latest}, post_ok={post_ok}")
+        else:
+            log(f"🔄 No new CSV found, continuing monitoring...")
+        interval = 60 if in_window else 300
+        log(f"⏰ Sleeping for {interval} seconds before next check...")
+        time.sleep(interval)
         # Check if we're past the cutoff window and no CSV arrived
         now = datetime.datetime.utcnow()
         today_window_start = now.replace(hour=23, minute=55, second=0, microsecond=0)
