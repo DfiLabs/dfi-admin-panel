@@ -549,7 +549,12 @@
         function populatePositionTable(tableId, positions, snapshot, referenceCapital) {
             const tbody = document.getElementById(tableId);
             tbody.innerHTML = '';
-            
+
+            // Safe fallback if referenceCapital is not passed
+            const refCap = (typeof referenceCapital !== 'undefined' && referenceCapital != null)
+                ? referenceCapital
+                : (currentPVPre || initialCapital);
+
             positions.forEach(position => {
                 const symbol = position.ticker || position.ric || position.internal_code || 'N/A';
                 const binanceSymbol = symbol.replace('_', '');
@@ -558,7 +563,7 @@
                 const currentPrice = snapshot.currentPrices[binanceSymbol];
                 const notional = parseFloat(position.target_notional || 0);
                 const side = parseFloat(position.target_contracts) > 0 ? 'LONG' : 'SHORT';
-                const weight = (Math.abs(notional) / referenceCapital) * 100;
+                const weight = (Math.abs(notional) / refCap) * 100;
                 
                 let pnl = 0;
                 let pnlPercent = 0;
