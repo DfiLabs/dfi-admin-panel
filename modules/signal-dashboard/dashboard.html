@@ -193,6 +193,8 @@
             timestamp: null,
             portfolioValue: 1000000, // Start with $1M
             dailyPnL: 0,
+            s3DailyPnL: null,
+            s3TotalPnL: null,
             positions: [],
             baselinePrices: {},
             currentPrices: {}
@@ -333,23 +335,15 @@
             try {
                 console.log('🔍 Loading current prices from S3 latest_prices.json...');
                 const response = await fetch('/signal-dashboard/data/latest_prices.json');
+                if (!response.ok) return {};
                 const data = await response.json();
-
+                const prices = data.prices || {};
                 const currentPrices = {};
                 const symbols = positions.map(p => (p.ticker || p.ric || p.internal_code).replace('_', ''));
-
-                // Map symbols to prices from S3 data
                 symbols.forEach(symbol => {
-                    const price = data.prices[symbol];
-                    if (price !== undefined && price !== null) {
-                        currentPrices[symbol] = parseFloat(price);
-                        console.log(`✅ ${symbol}: ${price}`);
-                    } else {
-                        console.log(`⚠️ No price for ${symbol}`);
-                        currentPrices[symbol] = null;
-                    }
+                    const price = prices[symbol];
+                    currentPrices[symbol] = (price !== undefined && price !== null) ? parseFloat(price) : null;
                 });
-
                 console.log(`📊 Loaded ${Object.keys(currentPrices).length}/${symbols.length} prices from S3`);
                 return currentPrices;
             } catch (error) {
@@ -497,20 +491,24 @@
             // Use PV_pre for percentage calculations if available, otherwise use initialCapital
             const referenceCapital = currentPVPre || initialCapital;
 
-            // Daily P&L
-            console.log('🔍 DEBUG: Setting Daily P&L to:', snapshot.dailyPnL);
-            console.log('🔍 DEBUG: Using reference capital for %:', referenceCapital);
-            document.getElementById('daily-pnl').textContent = formatCurrency(snapshot.dailyPnL);
-            document.getElementById('daily-pnl').className = `value ${snapshot.dailyPnL >= 0 ? 'positive' : 'negative'}`;
-            document.getElementById('daily-pnl-percent').textContent = `(${formatPercentage((snapshot.dailyPnL / referenceCapital) * 100)})`;
-            document.getElementById('daily-pnl-percent').className = `percentage ${snapshot.dailyPnL >= 0 ? 'positive' : 'negative'}`;
+            // Daily P&L (prefer S3 last record)
+            const dailyFromS3 = (typeof snapshot.s3DailyPnL === 'number') ? snapshot.s3DailyPnL : null;
+            const totalFromS3 = (typeof snapshot.s3TotalPnL === 'number') ? snapshot.s3TotalPnL : null;
+            const cardDaily = (dailyFromS3 !== null) ? dailyFromS3 : snapshot.dailyPnL;
+            const cardTotal = (totalFromS3 !== null) ? totalFromS3 : (snapshot.portfolioValue - initialCapital);
 
-            // Total P&L Since Inception = Portfolio Value - $1,000,000
-            const totalPnL = snapshot.portfolioValue - initialCapital;
-            document.getElementById('total-pnl').textContent = formatCurrency(totalPnL);
-            document.getElementById('total-pnl').className = `value ${totalPnL >= 0 ? 'positive' : 'negative'}`;
-            document.getElementById('total-pnl-percent').textContent = `(${formatPercentage((totalPnL / referenceCapital) * 100)})`;
-            document.getElementById('total-pnl-percent').className = `percentage ${totalPnL >= 0 ? 'positive' : 'negative'}`;
+            console.log('🔍 DEBUG: Setting Daily P&L to:', cardDaily);
+            console.log('🔍 DEBUG: Using reference capital for %:', referenceCapital);
+            document.getElementById('daily-pnl').textContent = formatCurrency(cardDaily);
+            document.getElementById('daily-pnl').className = `value ${cardDaily >= 0 ? 'positive' : 'negative'}`;
+            document.getElementById('daily-pnl-percent').textContent = `(${formatPercentage((cardDaily / referenceCapital) * 100)})`;
+            document.getElementById('daily-pnl-percent').className = `percentage ${cardDaily >= 0 ? 'positive' : 'negative'}`;
+
+            // Total P&L Since Inception (prefer S3 last record)
+            document.getElementById('total-pnl').textContent = formatCurrency(cardTotal);
+            document.getElementById('total-pnl').className = `value ${cardTotal >= 0 ? 'positive' : 'negative'}`;
+            document.getElementById('total-pnl-percent').textContent = `(${formatPercentage((cardTotal / referenceCapital) * 100)})`;
+            document.getElementById('total-pnl-percent').className = `percentage ${cardTotal >= 0 ? 'positive' : 'negative'}`;
             
             // Calculate Long/Short metrics
             const longShortMetrics = calculateLongShortMetrics(snapshot.positions);
@@ -661,6 +659,18 @@
                 console.log(`📊 Loaded ${data.length} PV points from S3`);
                 console.log('📊 First data point:', data[0]);
                 console.log('📊 Last data point:', data[data.length - 1]);
+
+                // Update cards from last S3 record
+                try {
+                    const last = data[data.length - 1] || {};
+                    if (last && typeof last.portfolio_value === 'number') {
+                        currentSnapshot.portfolioValue = last.portfolio_value;
+                    }
+                    currentSnapshot.s3DailyPnL = (typeof last.daily_pnl === 'number') ? last.daily_pnl : null;
+                    currentSnapshot.s3TotalPnL = (typeof last.total_pnl === 'number') ? last.total_pnl : null;
+                } catch (e) {
+                    console.warn('⚠️ Failed to update cards from S3 last record', e);
+                }
                 
                 // Filter by timeframe - be more aggressive about filtering
                 const now = new Date();
