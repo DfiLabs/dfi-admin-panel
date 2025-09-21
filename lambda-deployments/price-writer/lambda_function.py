@@ -6,41 +6,34 @@ Triggered by CloudWatch Events every 60 seconds
 """
 
 import json
-import time
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
-import subprocess
-import os
+import boto3
+from botocore.exceptions import ClientError
 import ssl
+import os
 
 # Configuration - can be overridden by environment variables
 S3_BUCKET = os.environ.get("S3_BUCKET", "dfi-signal-dashboard")
-S3_KEY = os.environ.get("S3_KEY", "signal-dashboard/data/latest_prices.json")
-BINANCE_API = "https://fapi.binance.com/fapi/v1/premiumIndex"
+S3_KEY_PREFIX = "signal-dashboard/data/"
+BINANCE_FUTURES_API = "https://fapi.binance.com/fapi/v1/premiumIndex"
 
-# Load baseline to get portfolio symbols
-def load_baseline_symbols():
-    try:
-        result = subprocess.run([
-            'aws', 's3', 'cp',
-            f's3://{S3_BUCKET}/signal-dashboard/data/daily_baseline.json',
-            '/tmp/baseline.json'
-        ], capture_output=True, text=True, timeout=30)
+# List of symbols to fetch prices for
+SYMBOLS_TO_FETCH = [
+    'BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'BNBUSDT', 'SOLUSDT', 'TRXUSDT',
+    'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'ICPUSDT', 'XLMUSDT',
+    'HBARUSDT', 'FETUSDT', 'BCHUSDT', 'LTCUSDT', 'DOTUSDT', 'TONUSDT',
+    'RENDERUSDT', 'SUIUSDT', 'UNIUSDT', 'NEARUSDT', 'ETCUSDT', 'AAVEUSDT',
+    'VETUSDT', 'ATOMUSDT', 'ALGOUSDT', 'APTUSDT', 'FILUSDT'
+]
 
-        if result.returncode == 0:
-            with open('/tmp/baseline.json', 'r') as f:
-                baseline = json.load(f)
-            return list(baseline.get('prices', {}).keys())
-        else:
-            print(f"Error loading baseline: {result.stderr}")
-            return []
-    except Exception as e:
-        print(f"Error loading baseline symbols: {e}")
-        return []
+def log(msg: str) -> None:
+    """Simple logging function for Lambda."""
+    print(f"[{datetime.now().isoformat()}] {msg}")
 
-# Get current prices from Binance Futures
-def get_current_prices(symbols):
+def get_mark_prices(symbols: list[str]) -> dict:
+    """Fetches current mark prices for a list of symbols from Binance Futures API."""
     prices = {}
 
     # Create SSL context that doesn't verify certificates
@@ -50,114 +43,72 @@ def get_current_prices(symbols):
 
     for symbol in symbols:
         try:
-            url = f"{BINANCE_API}?symbol={symbol}"
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, context=ssl_context, timeout=10) as response:
-                data = json.loads(response.read().decode())
-                prices[symbol] = float(data.get('markPrice', 0))
-                print(f"✅ {symbol}: {prices[symbol]}")
-        except Exception as e:
-            print(f"Error fetching price for {symbol}: {e}")
-            prices[symbol] = None
+            params = urllib.parse.urlencode({'symbol': symbol})
+            url = f"{BINANCE_FUTURES_API}?{params}"
 
+            with urllib.request.urlopen(url, context=ssl_context, timeout=10) as response:
+                data = json.loads(response.read().decode())
+                mark_price = float(data['markPrice'])
+                prices[symbol] = mark_price
+                log(f"✅ {symbol}: {mark_price}")
+        except Exception as e:
+            log(f"❌ Error fetching price for {symbol}: {e}")
     return prices
 
-# Write latest prices to S3 using AWS CLI
-def write_prices_to_s3(prices):
-    try:
-        timestamp = datetime.now(timezone.utc).isoformat()
-        data = {
-            'timestamp_utc': timestamp,
-            'prices': prices
-        }
-
-        # Write to temporary file first
-        with open('/tmp/latest_prices.json', 'w') as f:
-            json.dump(data, f, indent=2)
-
-        # Upload to S3 atomically
-        result = subprocess.run([
-            'aws', 's3', 'cp',
-            '/tmp/latest_prices.json',
-            f's3://{S3_BUCKET}/{S3_KEY}'
-        ], capture_output=True, text=True, timeout=30)
-
-        if result.returncode == 0:
-            print(f"✅ Latest prices updated at {timestamp}")
-            return True
-        else:
-            print(f"Error uploading prices: {result.stderr}")
-            return False
-    except Exception as e:
-        print(f"Error writing prices to S3: {e}")
-        return False
-
-def fetch_and_write_prices():
-    """
-    Fetch prices once and write to S3
-    Called by Lambda handler for single execution
-    """
-    print("🚀 Starting Latest Prices Writer...")
-    print("Fetching Binance marks and writing to S3")
-
-    try:
-            # Load symbols from baseline
-            symbols = load_baseline_symbols()
-
-            if not symbols:
-                print("❌ No symbols loaded from baseline, using fallback list")
-                symbols = ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'BNBUSDT', 'SOLUSDT', 'TRXUSDT', 'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'LINKUSDT']
-
-            print(f"📊 Fetching prices for {len(symbols)} symbols...")
-
-            # Fetch current prices
-            prices = get_current_prices(symbols)
-
-            # Filter out failed fetches
-            valid_prices = {k: v for k, v in prices.items() if v is not None}
-
-            if valid_prices:
-                # Write to S3
-                write_prices_to_s3(valid_prices)
-                print(f"📊 Successfully wrote {len(valid_prices)}/{len(symbols)} prices")
-            else:
-                print("❌ No valid prices to write")
-
-    except Exception as e:
-        print(f"❌ Error in price writer: {e}")
-        return False
-
-    return True
-
 def lambda_handler(event, context):
-    """
-    AWS Lambda handler function
-    """
-    print("🚀 Starting Lambda Price Writer...")
+    """AWS Lambda handler for price writing."""
+    log("🚀 Starting Latest Prices Writer Lambda...")
 
     try:
-        # Run the price fetching logic
-        success = fetch_and_write_prices()
+        # Initialize S3 client
+        s3_client = boto3.client('s3')
 
-        if success:
+        # Get current prices
+        log(f"📊 Fetching prices for {len(SYMBOLS_TO_FETCH)} symbols...")
+        current_prices = get_mark_prices(SYMBOLS_TO_FETCH)
+
+        if not current_prices:
+            log("❌ No prices fetched, skipping S3 write")
             return {
                 'statusCode': 200,
                 'body': json.dumps({
-                    'message': 'Price update completed successfully',
-                    'timestamp': datetime.now(timezone.utc).isoformat()
-                })
-            }
-        else:
-            return {
-                'statusCode': 500,
-                'body': json.dumps({
-                    'error': 'Price update failed',
+                    'message': 'No prices available',
                     'timestamp': datetime.now(timezone.utc).isoformat()
                 })
             }
 
+        log(f"📊 Successfully fetched {len(current_prices)}/{len(SYMBOLS_TO_FETCH)} prices")
+
+        # Create price data structure
+        timestamp = datetime.now(timezone.utc).isoformat()
+        prices_data = {
+            'timestamp_utc': timestamp,
+            'prices': current_prices
+        }
+
+        # Write to S3
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=S3_KEY_PREFIX + 'latest_prices.json',
+            Body=json.dumps(prices_data, indent=2),
+            ContentType='application/json'
+        )
+
+        log("✅ Latest prices updated successfully")
+
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'message': 'Latest prices updated successfully',
+                'prices_count': len(current_prices),
+                'timestamp': timestamp
+            })
+        }
+
     except Exception as e:
-        print(f"❌ Lambda execution failed: {str(e)}")
+        log(f"❌ Lambda execution failed: {str(e)}")
+        import traceback
+        log(f"Traceback: {traceback.format_exc()}")
         return {
             'statusCode': 500,
             'body': json.dumps({
@@ -166,7 +117,3 @@ def lambda_handler(event, context):
             })
         }
 
-if __name__ == "__main__":
-    # For local testing
-    print("🧪 Running locally for testing...")
-    fetch_and_write_prices()
