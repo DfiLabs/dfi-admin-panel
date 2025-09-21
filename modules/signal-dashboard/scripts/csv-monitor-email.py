@@ -19,15 +19,16 @@ try:
 except Exception:
     pass
 
-# Import email notifier with safe fallback
+# Import email notifier with safe fallback (define temporary printer until log() exists)
+_early_print = lambda m: print(m)
 try:
     from email_notifier import EmailNotifier  # type: ignore
-    log("✅ EmailNotifier imported successfully from email_notifier.py")
+    _early_print("✅ EmailNotifier imported successfully from email_notifier.py")
 except Exception as e:
-    log(f"❌ EmailNotifier import failed: {e}")
+    _early_print(f"❌ EmailNotifier import failed: {e}")
     class EmailNotifier:  # type: ignore
         def send_once_per_day(self, subject: str, html: str) -> None:
-            log(f"Email notifier unavailable. Would have sent: {subject}")
+            _early_print(f"Email notifier unavailable. Would have sent: {subject}")
 
 
 CSV_DIRECTORY = '/home/leo/Desktop/dfilabs-machine-v2/dfilabs-machine-v2/signal/combined_descartes_unravel/qube/signal/'
