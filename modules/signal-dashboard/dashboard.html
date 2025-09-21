@@ -199,6 +199,13 @@
         };
 
         const initialCapital = 1000000;
+        // Global fallback for legacy code paths that may reference `referenceCapital`
+        // Ensures no ReferenceError even if an older cached snippet uses the symbol
+        // Local scopes can still shadow this with their own `const referenceCapital`
+        var referenceCapital = initialCapital;
+        if (typeof window !== 'undefined') {
+            window.referenceCapital = initialCapital;
+        }
         let currentPVPre = null; // Will be loaded from pre_execution.json
         let portfolioChart = null;
 
@@ -530,8 +537,8 @@
             // Update top performers
             updateTopPerformers();
             
-            // Update table (temporarily disabled due to caching issue)
-            // updatePositionsTable(referenceCapital);
+            // Update table
+            updatePositionsTable(referenceCapital);
         }
 
         // Update positions table
