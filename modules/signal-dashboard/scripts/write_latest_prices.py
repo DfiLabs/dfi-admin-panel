@@ -157,6 +157,11 @@ def write_latest_prices(prices: Dict[str, float]) -> None:
 
 def main() -> None:
     logger.info("Starting latest_prices writer: bucket=%s key=%s region=%s", BUCKET, LATEST_KEY, REGION)
+    # Safety guard: refuse to write to prod key unless explicitly allowed
+    if os.getenv("ALLOW_PROD_WRITE") != "1" and BUCKET == "dfi-signal-dashboard" and LATEST_KEY == "signal-dashboard/data/latest_prices.json":
+        logger.info("Refusing to write primary latest_prices.json without ALLOW_PROD_WRITE=1 (safe default).")
+        logger.info("Set LATEST_PRICES_KEY to an alternate path or export ALLOW_PROD_WRITE=1 for intentional prod writes.")
+        sys.exit(0)
     # Warm-up discovery
     symbols = discover_symbols_from_latest_csv()
     if not symbols:
