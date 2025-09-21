@@ -263,14 +263,16 @@ def main() -> None:
             warn(str(e))
 
     # 6) Snapshot baseline prices at execution time
+    exec_ts = datetime.now(timezone.utc).isoformat()
     baseline_payload = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": exec_ts,
         "csv_filename": csv_filename,
-        " portfolio_value_at_pv_pre": pv_pre,
+        "pv_pre": pv_pre,
+        "portfolio_value": pv_pre,
         "prices": marks,
     }
     write_json_to_s3(f"{S3_PREFIX}daily_baseline.json", baseline_payload)
-    log("daily_baseline.json written")
+    log("daily_baseline.json written (execution baseline)")
 
     # 7) Update pre_execution.json with pv_pre and time
     pre["pv_pre_time"] = cutoff.isoformat()
@@ -289,6 +291,11 @@ def main() -> None:
     }
     write_json_to_s3(f"{S3_PREFIX}execution_result.json", result)
     log("execution_result.json written (plan)")
+
+    # 9) Convenience latest_executed.json
+    latest_executed = {"timestamp_utc": exec_ts, "csv_filename": csv_filename}
+    write_json_to_s3(f"{S3_PREFIX}latest_executed.json", latest_executed)
+    log("latest_executed.json written")
 
 
 if __name__ == "__main__":
