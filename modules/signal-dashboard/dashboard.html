@@ -550,10 +550,8 @@
             const tbody = document.getElementById(tableId);
             tbody.innerHTML = '';
 
-            // Safe fallback if referenceCapital is not passed
-            const refCap = (typeof referenceCapital !== 'undefined' && referenceCapital != null)
-                ? referenceCapital
-                : (currentPVPre || initialCapital);
+            // Use fixed reference capital of $1,000,000 for calculations
+            const refCap = initialCapital;
 
             positions.forEach(position => {
                 const symbol = position.ticker || position.ric || position.internal_code || 'N/A';
@@ -711,7 +709,7 @@
                 console.log('📊 No data available, showing empty chart');
                 data = [{
                     timestamp: new Date().toISOString(),
-                    portfolioValue: (currentPVPre || initialCapital),
+                    portfolioValue: initialCapital,
                     daily_pnl: 0,
                     total_pnl: 0
                 }];
