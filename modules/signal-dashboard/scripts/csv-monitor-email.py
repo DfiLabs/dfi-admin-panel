@@ -844,7 +844,7 @@ def continuous_timeseries_writer() -> None:
                 daily_pnl = 0
                 is_day1_fallback = False
                 
-                // Get current prices from S3 latest_prices.json
+                # Get current prices from S3 latest_prices.json
                 current_prices = {}
                 try:
                     latest_obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest_prices.json')
