@@ -531,22 +531,22 @@
             updateTopPerformers();
             
             // Update table
-            updatePositionsTable();
+            updatePositionsTable(referenceCapital);
         }
 
         // Update positions table
-        function updatePositionsTable() {
+        function updatePositionsTable(referenceCapital) {
             const snapshot = currentSnapshot;
             if (snapshot.positions.length === 0) return;
             
             const longPositions = snapshot.positions.filter(p => parseFloat(p.target_contracts) > 0);
             const shortPositions = snapshot.positions.filter(p => parseFloat(p.target_contracts) < 0);
             
-            populatePositionTable('long-positions', longPositions, snapshot);
-            populatePositionTable('short-positions', shortPositions, snapshot);
+            populatePositionTable('long-positions', longPositions, snapshot, referenceCapital);
+            populatePositionTable('short-positions', shortPositions, snapshot, referenceCapital);
         }
 
-        function populatePositionTable(tableId, positions, snapshot) {
+        function populatePositionTable(tableId, positions, snapshot, referenceCapital) {
             const tbody = document.getElementById(tableId);
             tbody.innerHTML = '';
             
@@ -706,7 +706,7 @@
                 console.log('📊 No data available, showing empty chart');
                 data = [{
                     timestamp: new Date().toISOString(),
-                    portfolioValue: referenceCapital,
+                    portfolioValue: (currentPVPre || initialCapital),
                     daily_pnl: 0,
                     total_pnl: 0
                 }];
