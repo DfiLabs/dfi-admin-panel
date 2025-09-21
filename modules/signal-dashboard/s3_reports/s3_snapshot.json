@@ -1,0 +1,372 @@
+{
+  "generated_at_utc": "2025-09-21T14:14:20.508294Z",
+  "sources": {
+    "portfolio_value_log.jsonl": {
+      "count": 261,
+      "first_timestamp": "2025-09-20T20:46:21.799908+00:00",
+      "last_timestamp": "2025-09-21T14:13:39.242461+00:00",
+      "first": {
+        "timestamp": "2025-09-20T20:46:21.799908+00:00",
+        "portfolio_value": 1000000.0,
+        "daily_pnl": 0.0,
+        "total_pnl": 0.0
+      },
+      "last": {
+        "timestamp": "2025-09-21T14:13:39.242461+00:00",
+        "portfolio_value": 996655.2997889454,
+        "daily_pnl": -3344.7002110546227,
+        "total_pnl": -3344.7002110546227,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      }
+    },
+    "latest_prices.json": {
+      "timestamp_utc": "2025-09-21T14:13:23.325671+00:00",
+      "symbols": [
+        "AAVEUSDT",
+        "ADAUSDT",
+        "ALGOUSDT",
+        "APTUSDT",
+        "ATOMUSDT",
+        "AVAXUSDT",
+        "BCHUSDT",
+        "BNBUSDT",
+        "BTCUSDT",
+        "DOGEUSDT",
+        "DOTUSDT",
+        "ETCUSDT",
+        "ETHUSDT",
+        "FETUSDT",
+        "FILUSDT",
+        "HBARUSDT",
+        "ICPUSDT",
+        "LINKUSDT",
+        "LTCUSDT",
+        "NEARUSDT",
+        "RENDERUSDT",
+        "SOLUSDT",
+        "SUIUSDT",
+        "TONUSDT",
+        "TRXUSDT",
+        "UNIUSDT",
+        "VETUSDT",
+        "XLMUSDT",
+        "XRPUSDT"
+      ],
+      "count": 29
+    },
+    "daily_baseline.json": {
+      "timestamp_utc": "2025-09-21 02:20:20",
+      "count": 29,
+      "symbols": [
+        "AAVEUSDT",
+        "ADAUSDT",
+        "ALGOUSDT",
+        "APTUSDT",
+        "ATOMUSDT",
+        "AVAXUSDT",
+        "BCHUSDT",
+        "BNBUSDT",
+        "BTCUSDT",
+        "DOGEUSDT"
+      ]
+    },
+    "pre_execution.json_present": false,
+    "latest.json": {
+      "filename": "lpxd_external_advisors_DF_20250920-2355.csv",
+      "updated_utc": "2025-09-21 07:00:35"
+    }
+  },
+  "data": {
+    "pv_recent_20": [
+      {
+        "timestamp": "2025-09-21T13:57:49.601640+00:00",
+        "portfolio_value": 996936.1882217763,
+        "daily_pnl": -3063.8117782236973,
+        "total_pnl": -3063.8117782236973,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T13:58:40.470358+00:00",
+        "portfolio_value": 996822.7164586504,
+        "daily_pnl": -3177.2835413495422,
+        "total_pnl": -3177.2835413495422,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T13:59:11.908414+00:00",
+        "portfolio_value": 1000000.0,
+        "daily_pnl": 0.0,
+        "total_pnl": 0.0
+      },
+      {
+        "timestamp": "2025-09-21T13:59:40.821625+00:00",
+        "portfolio_value": 996636.7310761578,
+        "daily_pnl": -3363.2689238422463,
+        "total_pnl": -3363.2689238422463,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:00:41.047139+00:00",
+        "portfolio_value": 996606.1833198331,
+        "daily_pnl": -3393.8166801668253,
+        "total_pnl": -3393.8166801668253,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:01:37.162302+00:00",
+        "portfolio_value": 996667.4494078615,
+        "daily_pnl": -3332.550592138561,
+        "total_pnl": -3332.550592138561,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:02:37.917262+00:00",
+        "portfolio_value": 996489.0066669009,
+        "daily_pnl": -3510.9933330991007,
+        "total_pnl": -3510.9933330991007,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:03:39.504146+00:00",
+        "portfolio_value": 996564.5416219727,
+        "daily_pnl": -3435.458378027299,
+        "total_pnl": -3435.458378027299,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:04:11.961057+00:00",
+        "portfolio_value": 1000000.0,
+        "daily_pnl": 0.0,
+        "total_pnl": 0.0
+      },
+      {
+        "timestamp": "2025-09-21T14:04:37.031140+00:00",
+        "portfolio_value": 996670.4887219602,
+        "daily_pnl": -3329.5112780397894,
+        "total_pnl": -3329.5112780397894,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:05:39.663680+00:00",
+        "portfolio_value": 996931.2101700585,
+        "daily_pnl": -3068.789829941438,
+        "total_pnl": -3068.789829941438,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:06:42.202540+00:00",
+        "portfolio_value": 996909.9734711505,
+        "daily_pnl": -3090.026528849529,
+        "total_pnl": -3090.026528849529,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:07:41.301769+00:00",
+        "portfolio_value": 996755.6232642598,
+        "daily_pnl": -3244.376735740167,
+        "total_pnl": -3244.376735740167,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:08:39.442290+00:00",
+        "portfolio_value": 996737.825254141,
+        "daily_pnl": -3262.1747458590326,
+        "total_pnl": -3262.1747458590326,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:09:11.825817+00:00",
+        "portfolio_value": 1000000.0,
+        "daily_pnl": 0.0,
+        "total_pnl": 0.0
+      },
+      {
+        "timestamp": "2025-09-21T14:09:37.856111+00:00",
+        "portfolio_value": 996710.7598671146,
+        "daily_pnl": -3289.240132885393,
+        "total_pnl": -3289.240132885393,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:10:35.620575+00:00",
+        "portfolio_value": 996714.3261451973,
+        "daily_pnl": -3285.6738548027815,
+        "total_pnl": -3285.6738548027815,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:11:37.455254+00:00",
+        "portfolio_value": 996799.9838086467,
+        "daily_pnl": -3200.016191353373,
+        "total_pnl": -3200.016191353373,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:12:37.446797+00:00",
+        "portfolio_value": 996608.7822469187,
+        "daily_pnl": -3391.2177530813797,
+        "total_pnl": -3391.2177530813797,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      },
+      {
+        "timestamp": "2025-09-21T14:13:39.242461+00:00",
+        "portfolio_value": 996655.2997889454,
+        "daily_pnl": -3344.7002110546227,
+        "total_pnl": -3344.7002110546227,
+        "audit": {
+          "t0_execution_time": null,
+          "t1_baseline_time": "2025-09-21T02:20:20",
+          "csv_sha256": "82b77db46bf8636db03c09ff3f981938ad1a1d14b5c42db30451c5ee24b0f976",
+          "timing_anchors_valid": false,
+          "phase5_validation": null
+        }
+      }
+    ],
+    "latest_prices_sample": {
+      "BTCUSDT": 115608.26626812,
+      "ETHUSDT": 4476.0,
+      "XRPUSDT": 2.9823,
+      "BNBUSDT": 1051.91210576,
+      "SOLUSDT": 239.32641228,
+      "TRXUSDT": 0.34403,
+      "DOGEUSDT": 0.26725973,
+      "ADAUSDT": 0.8879,
+      "AVAXUSDT": 32.94971947,
+      "LINKUSDT": 23.15006162,
+      "ICPUSDT": 4.74549611,
+      "XLMUSDT": 0.38389707,
+      "HBARUSDT": 0.23714142,
+      "FETUSDT": 0.64354443,
+      "BCHUSDT": 598.09,
+      "LTCUSDT": 115.03,
+      "DOTUSDT": 4.30927181,
+      "TONUSDT": 3.07104392,
+      "RENDERUSDT": 3.985,
+      "SUIUSDT": 3.65733558
+    },
+    "baseline_prices_sample": {
+      "BTCUSDT": 115499.99,
+      "ETHUSDT": 4474.19,
+      "XRPUSDT": 2.9803,
+      "BNBUSDT": 1077.65,
+      "SOLUSDT": 240.57,
+      "TRXUSDT": 0.346,
+      "DOGEUSDT": 0.268,
+      "ADAUSDT": 0.8929,
+      "AVAXUSDT": 32.9,
+      "LINKUSDT": 23.32,
+      "ICPUSDT": 4.738,
+      "XLMUSDT": 0.3863,
+      "HBARUSDT": 0.2412,
+      "FETUSDT": 0.643,
+      "BCHUSDT": 597.6,
+      "LTCUSDT": 114.13,
+      "DOTUSDT": 4.337,
+      "TONUSDT": 3.089,
+      "RENDERUSDT": 3.979,
+      "SUIUSDT": 3.6509
+    }
+  }
+}

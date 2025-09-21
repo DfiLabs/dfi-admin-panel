@@ -245,17 +245,20 @@ def calculate_real_portfolio_value(csv_filename: str) -> dict:
                 log(f"Error parsing position data: {e}, position: {pos}")
                 continue
         
-        # Fetch current prices from Binance
-        import requests
+        # Fetch current prices from S3 latest_prices.json (single source of truth)
         current_prices = {}
-        for symbol in symbols:
-            try:
-                response = requests.get(f'https://api.binance.com/api/v3/ticker/price?symbol={symbol}', timeout=5)
-                if response.status_code == 200:
-                    data = response.json()
-                    current_prices[symbol] = float(data['price'])
-            except:
-                pass
+        try:
+            latest_obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest_prices.json')
+            latest_data = json.loads(latest_obj['Body'].read().decode('utf-8'))
+            prices_map = latest_data.get('prices', {}) or {}
+            for symbol in symbols:
+                if symbol in prices_map:
+                    try:
+                        current_prices[symbol] = float(prices_map[symbol])
+                    except Exception:
+                        pass
+        except Exception:
+            current_prices = {}
         
         # Calculate real P&L
         total_pnl = 0
@@ -841,23 +844,21 @@ def continuous_timeseries_writer() -> None:
                 daily_pnl = 0
                 is_day1_fallback = False
                 
-                # Get current prices
-                import requests
+                // Get current prices from S3 latest_prices.json
                 current_prices = {}
-                symbols = []
-                for pos in portfolio_data.get('positions', []):
-                    symbol = pos.get('ticker', '').replace('_', '')
-                    if symbol:
-                        symbols.append(symbol)
-                
-                for symbol in symbols:
-                    try:
-                        resp = requests.get(f'https://api.binance.com/api/v3/ticker/price?symbol={symbol}', timeout=5)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            current_prices[symbol] = float(data['price'])
-                    except:
-                        pass
+                try:
+                    latest_obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest_prices.json')
+                    latest_data = json.loads(latest_obj['Body'].read().decode('utf-8'))
+                    prices_map = latest_data.get('prices', {}) or {}
+                    for pos in portfolio_data.get('positions', []):
+                        symbol = pos.get('ticker', '').replace('_', '')
+                        if symbol in prices_map:
+                            try:
+                                current_prices[symbol] = float(prices_map[symbol])
+                            except Exception:
+                                pass
+                except Exception:
+                    current_prices = {}
                 
                 # Calculate daily P&L using same logic as UI
                 for pos in portfolio_data.get('positions', []):
