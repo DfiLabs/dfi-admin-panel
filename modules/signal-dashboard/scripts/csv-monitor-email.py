@@ -939,7 +939,20 @@ def main() -> None:
     continuous_timeseries_writer()
     log("⚡ Timeseries writer started")
 
+    # helper to know if we are within the nightly window (23:55 → 01:25 UTC)
+    def compute_in_window(now_utc: datetime.datetime) -> bool:
+        today_window_start = now_utc.replace(hour=23, minute=55, second=0, microsecond=0)
+        if now_utc.hour < 2:  # window crossing midnight
+            window_end = now_utc.replace(hour=1, minute=25, second=0, microsecond=0)
+            return now_utc <= window_end
+        else:
+            window_end = today_window_start + datetime.timedelta(hours=1, minutes=30)
+            return today_window_start <= now_utc <= window_end
+
     while True:
+        # compute window state at the top of the loop
+        now0 = datetime.datetime.utcnow()
+        in_window = compute_in_window(now0)
         latest = get_latest_2355()
         if latest and latest != last_processed:
             log(f"🔍 Detected new CSV: {latest}")
@@ -1163,13 +1176,7 @@ def main() -> None:
         time.sleep(interval)
         # Check if we're past the cutoff window and no CSV arrived
         now = datetime.datetime.utcnow()
-        today_window_start = now.replace(hour=23, minute=55, second=0, microsecond=0)
-        if now.hour < 2:  # handle window crossing midnight
-            window_end = now.replace(hour=1, minute=25, second=0, microsecond=0)
-            in_window = now <= window_end
-        else:
-            window_end = today_window_start + datetime.timedelta(hours=1, minutes=30)
-            in_window = today_window_start <= now <= window_end
+        in_window = compute_in_window(now)
         
         # If we're past the window and no CSV was processed today, write trace
         if not in_window and last_processed is None:
