@@ -87,6 +87,43 @@ def write_json_to_s3(key: str, payload: dict) -> None:
     )
 
 
+def read_latest_csv_filename() -> str | None:
+    """Resolve today's CSV filename.
+
+    Priority:
+      1) data/latest.json { filename }
+      2) List S3 under prefix and pick the newest matching CSV
+    """
+    # Try latest.json first
+    try:
+        latest_obj = s3().get_object(Bucket=S3_BUCKET, Key=f"{S3_PREFIX}latest.json")
+        data = json.loads(latest_obj["Body"].read().decode("utf-8"))
+        name = data.get("filename")
+        if name and name.endswith('.csv'):
+            return name
+    except Exception:
+        pass
+
+    # Fallback: list bucket for matching CSVs and take the most recent
+    try:
+        client = s3()
+        resp = client.list_objects_v2(Bucket=S3_BUCKET, Prefix=S3_PREFIX)
+        if "Contents" not in resp:
+            return None
+        candidates: list[tuple[str, str]] = []  # (key, last_modified_iso)
+        for obj in resp["Contents"]:
+            key = obj["Key"]
+            if key.endswith('.csv') and 'lpxd_external_advisors_DF_' in key:
+                candidates.append((key, obj["LastModified"].isoformat()))
+        if not candidates:
+            return None
+        # Sort by last_modified descending
+        candidates.sort(key=lambda t: t[1], reverse=True)
+        return candidates[0][0].split('/')[-1]
+    except Exception:
+        return None
+
+
 def get_pv_pre(cutoff_utc: datetime) -> Tuple[float, str]:
     """Return (pv_pre, timestamp_iso) from portfolio_value_log.jsonl strictly before cutoff.
     Fallback to 1_000_000 if none found.
@@ -118,6 +155,24 @@ def get_pv_pre(cutoff_utc: datetime) -> Tuple[float, str]:
         except Exception:
             continue
     if pv_pre is None:
+        # Continuity fallback: if there is no PV strictly before cutoff (e.g., first day after reset),
+        # use the most recent PV available in the log instead of defaulting to 1,000,000.
+        try:
+            last_pv = None
+            last_ts = "N/A"
+            for line in reversed(raw.splitlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                last_pv = rec.get("portfolio_value") or rec.get("portfolioValue")
+                last_ts = rec.get("timestamp") or rec.get("ts_utc") or "N/A"
+                if last_pv is not None:
+                    break
+            if last_pv is not None:
+                return float(last_pv), last_ts
+        except Exception:
+            pass
         return 1_000_000.0, "N/A"
     return float(pv_pre), pv_ts
 
@@ -209,18 +264,35 @@ def place_order(symbol: str, delta_qty: float) -> None:
 
 
 def main() -> None:
+    # Console log capture for daily execution
+    import sys
+    from datetime import datetime
+    
+    log_filename = f"/tmp/execute_daily_trades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    log_file = open(log_filename, 'w')
+    
+    class TeeOutput:
+        def __init__(self, *files):
+            self.files = files
+        def write(self, text):
+            for f in self.files:
+                f.write(text)
+                f.flush()
+        def flush(self):
+            for f in self.files:
+                f.flush()
+    
+    # Redirect stdout to both console and file
+    original_stdout = sys.stdout
+    sys.stdout = TeeOutput(original_stdout, log_file)
+    
     log("Starting scheduled execution script (00:30 UTC)")
-    # 1) Load pre_execution.json
-    pre_key = f"{S3_PREFIX}pre_execution.json"
-    try:
-        pre = read_json_from_s3(pre_key)
-    except ClientError as e:
-        err(f"pre_execution.json missing: {e}")
-        sys.exit(1)
-
-    csv_filename = pre.get("csv_filename")
+    log(f"📝 Execution log: {log_filename}")
+    
+    # 1) Resolve today's CSV filename (do not depend on pre_execution.json)
+    csv_filename = read_latest_csv_filename()
     if not csv_filename:
-        err("pre_execution.json missing csv_filename")
+        err("Cannot resolve today's CSV filename (latest.json or S3 scan)")
         sys.exit(1)
 
     # 2) Determine cutoff (today 00:30 UTC)
@@ -229,6 +301,13 @@ def main() -> None:
     # If running after 00:30 already, use today's 00:30; else go to previous day
     if now < cutoff:
         cutoff = cutoff - timedelta(days=1)
+    # Guard: ignore invocations far from the intended 00:30 UTC window
+    window_seconds = 30 * 60  # 30 minutes
+    delta_seconds = abs((now - cutoff).total_seconds())
+    if delta_seconds > window_seconds:
+        warn(f"Invocation outside 00:30±30m window (delta={delta_seconds:.0f}s); skipping without writes")
+        sys.exit(0)
+
     pv_pre, pv_pre_ts = get_pv_pre(cutoff)
     log(f"pv_pre={pv_pre:.2f} at {pv_pre_ts} (cutoff={cutoff.isoformat()})")
 
@@ -274,11 +353,18 @@ def main() -> None:
     write_json_to_s3(f"{S3_PREFIX}daily_baseline.json", baseline_payload)
     log("daily_baseline.json written (execution baseline)")
 
-    # 7) Update pre_execution.json with pv_pre and time
-    pre["pv_pre_time"] = cutoff.isoformat()
-    pre["pv_pre"] = pv_pre
-    write_json_to_s3(pre_key, pre)
-    log("pre_execution.json updated with pv_pre")
+    # 7) Write finalized pre_execution.json (single source of truth)
+    pre_key = f"{S3_PREFIX}pre_execution.json"
+    pre_payload = {
+        "timestamp_utc": exec_ts,
+        "csv_filename": csv_filename,
+        "pv_pre_time": cutoff.isoformat(),
+        "pv_pre": pv_pre,
+        "executed_at_utc": exec_ts,
+        "finalized": True,
+    }
+    write_json_to_s3(pre_key, pre_payload)
+    log("pre_execution.json written (finalized)")
 
     # 8) Record execution plan for audit
     result = {
@@ -296,6 +382,36 @@ def main() -> None:
     latest_executed = {"timestamp_utc": exec_ts, "csv_filename": csv_filename}
     write_json_to_s3(f"{S3_PREFIX}latest_executed.json", latest_executed)
     log("latest_executed.json written")
+    
+    # Mirror execution log to S3 for persistence
+    try:
+        log_file.close()
+        sys.stdout = original_stdout
+        
+        # Upload log to S3
+        s3_log_key = f"signal-dashboard/execution-logs/execute_daily_trades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        with open(log_filename, 'r') as f:
+            log_content = f.read()
+        
+        s3().put_object(
+            Bucket=S3_BUCKET,
+            Key=s3_log_key,
+            Body=log_content.encode('utf-8'),
+            ContentType='text/plain',
+            CacheControl='no-store'
+        )
+        print(f"📝 Execution log uploaded to s3://{S3_BUCKET}/{s3_log_key}")
+        print(f"📝 Local log: {log_filename}")
+        
+    except Exception as e:
+        print(f"⚠️ Failed to upload execution log: {e}")
+        print(f"📝 Local log available: {log_filename}")
+    
+    except Exception as e:
+        log_file.close()
+        sys.stdout = original_stdout
+        print(f"❌ Execution failed: {e}")
+        raise
 
 
 if __name__ == "__main__":

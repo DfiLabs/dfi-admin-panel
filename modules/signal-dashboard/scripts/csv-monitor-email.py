@@ -31,12 +31,13 @@ except Exception as e:
             _early_print(f"Email notifier unavailable. Would have sent: {subject}")
 
 
-CSV_DIRECTORY = '/home/leo/Desktop/dfilabs-machine-v2/dfilabs-machine-v2/signal/combined_descartes_unravel/qube/signal/'
+# Allow overriding by environment variables to support multiple strategies
+CSV_DIRECTORY = os.getenv('CSV_DIRECTORY', '/home/leo/Desktop/dfilabs-machine-v2/dfilabs-machine-v2/signal/combined_descartes_unravel/qube/signal/')
 TARGET_SUFFIX = '2355.csv'
 LOG_FILE = '/home/ubuntu/csv-detection.log'
-S3_BUCKET_NAME = 'dfi-signal-dashboard'
+S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME', 'dfi-signal-dashboard')
 # Serve under CloudFront path /signal-dashboard/*
-S3_KEY_PREFIX = 'signal-dashboard/data/'
+S3_KEY_PREFIX = os.getenv('S3_KEY_PREFIX', 'signal-dashboard/data/')
 S3_DASHBOARD_KEY = 'signal-dashboard/dashboard.html'
 
 # detector-only switches
@@ -458,18 +459,12 @@ def write_daily_baseline_json(csv_filename: str, portfolio_value: float, prices:
         return False
 
 
-def write_pre_execution_json(csv_filename: str, csv_sha256: str) -> bool:
-    """Write pre_execution.json at CSV detection time (no execution).
+def write_pre_execution_pending(csv_filename: str, csv_sha256: str) -> bool:
+    """Write pre_execution_pending.json at CSV detection time (no execution).
 
-    Shape:
-    {
-      "timestamp_utc": <detection_time_iso>,
-      "csv_filename": "...",
-      "csv_sha256": "...",
-      "pv_pre_time": "TBD",
-      "pv_pre": null,
-      "prices_at_t0": { ... }
-    }
+    Detection-only artifact. The finalized pre_execution.json is written by
+    the executor at 00:30 UTC. This function must never overwrite
+    pre_execution.json.
     """
     try:
         s3 = boto3.client('s3')
@@ -493,15 +488,15 @@ def write_pre_execution_json(csv_filename: str, csv_sha256: str) -> bool:
         }
         s3.put_object(
             Bucket=S3_BUCKET_NAME,
-            Key=S3_KEY_PREFIX + 'pre_execution.json',
+            Key=S3_KEY_PREFIX + 'pre_execution_pending.json',
             Body=json.dumps(payload).encode('utf-8'),
             ContentType='application/json',
             CacheControl='no-store'
         )
-        log('pre_execution.json written (snapshot at CSV detection, no execution)')
+        log('pre_execution_pending.json written (detection snapshot)')
         return True
     except Exception as e:
-        log(f'Failed to write pre_execution.json: {e}')
+        log(f'Failed to write pre_execution_pending.json: {e}')
         return False
 
 
@@ -957,7 +952,29 @@ def continuous_timeseries_writer() -> None:
 
 
 def main() -> None:
+    # Console log capture for CSV monitoring
+    import sys
+    
+    log_filename = f"/tmp/csv_monitor_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    log_file = open(log_filename, 'w')
+    
+    class TeeOutput:
+        def __init__(self, *files):
+            self.files = files
+        def write(self, text):
+            for f in self.files:
+                f.write(text)
+                f.flush()
+        def flush(self):
+            for f in self.files:
+                f.flush()
+    
+    # Redirect stdout to both console and file
+    original_stdout = sys.stdout
+    sys.stdout = TeeOutput(original_stdout, log_file)
+    
     log("🚀 Starting CSV monitoring script...")
+    log(f"📝 Monitor log: {log_filename}")
     notifier = EmailNotifier()
     last_processed = None
     last_executed_sha256 = None
@@ -1050,8 +1067,8 @@ def main() -> None:
             ok_latest = write_latest_json(latest)
             log(f"📄 ok_latest = {ok_latest} (latest.json write result)")
 
-            # 3b) Write pre_execution.json snapshot and EXIT early (no execution now)
-            write_pre_execution_json(latest, csv_sha256)
+            # 3b) Write detection-only snapshot and EXIT early (no execution now)
+            write_pre_execution_pending(latest, csv_sha256)
             last_processed = latest
             last_executed_sha256 = csv_sha256
             log('⏹️ Detection pipeline complete (pre_execution.json written); deferring execution to scheduled time')
@@ -1221,6 +1238,31 @@ def main() -> None:
         
         interval = 60 if in_window else 300
         time.sleep(interval)
+    
+    # Close log file and upload to S3 when monitor exits
+    try:
+        log_file.close()
+        sys.stdout = original_stdout
+        
+        # Upload monitor log to S3
+        s3_log_key = f"signal-dashboard/execution-logs/csv_monitor_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        with open(log_filename, 'r') as f:
+            log_content = f.read()
+        
+        s3 = boto3.client('s3')
+        s3.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_log_key,
+            Body=log_content.encode('utf-8'),
+            ContentType='text/plain',
+            CacheControl='no-store'
+        )
+        print(f"📝 Monitor log uploaded to s3://{S3_BUCKET_NAME}/{s3_log_key}")
+        print(f"📝 Local log: {log_filename}")
+        
+    except Exception as e:
+        print(f"⚠️ Failed to upload monitor log: {e}")
+        print(f"📝 Local log available: {log_filename}")
 
 
 if __name__ == '__main__':

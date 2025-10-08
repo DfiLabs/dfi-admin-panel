@@ -11,13 +11,13 @@
 <body>
     <header class="header">
         <div class="container">
-            <div class="logo">
+            <a class="logo" href="https://admin.dfi-labs.com/admin/index.html">
                 <img src="assets/images/dfi-labs-logo.png" alt="DFI Labs" class="logo-image">
                 <div class="logo-text">
                     <span class="logo-main">Strategy Monitor</span>
                     <span class="logo-subtitle">DFI Labs</span>
                 </div>
-            </div>
+            </a>
             <div class="header-info">
                 <div class="status-indicator">
                     <div class="status-dot active"></div>
@@ -33,6 +33,14 @@
             <div class="dashboard-header">
                 <h1>Live Portfolio Dashboard</h1>
                 <p>Real-time cryptocurrency strategy monitoring & performance tracking</p>
+                <div class="strategy-row" style="margin-top: 16px; display:flex; align-items:center; gap:12px; justify-content:center;">
+                    <label for="strategy-select" style="font-weight:600; color:#64748b;">Strategy</label>
+                    <select id="strategy-select" style="padding:8px 10px; border:1px solid rgba(148,163,184,0.4); border-radius:8px; background:#fff; color:#1f2937;">
+                        <option value="unravel">Descartes Unravel</option>
+                        <option value="beta">Descartes Beta</option>
+                        <option value="ridge">Descartes Ridge Unravel</option>
+                    </select>
+                </div>
             </div>
 
             <!-- Delta Donut Chart -->
@@ -101,9 +109,35 @@
             <div class="chart-section">
                 <div class="chart-header">
                     <h2>Portfolio Performance</h2>
-                    <div class="csv-info" onclick="toggleCSVInfo()" title="Click to show current CSV">
-                        <span class="csv-indicator">📊</span>
-                        <span class="csv-filename" id="csv-filename" style="display: none;">Loading...</span>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <div class="csv-info" onclick="toggleCSVInfo()" title="Click to show current CSV">
+                            <span class="csv-indicator">📊</span>
+                            <span class="csv-filename" id="csv-filename" hidden>Loading...</span>
+                        </div>
+                        <div class="download-widget">
+                            <button id="dw-toggle" class="time-button" title="Download time series">Download</button>
+                            <div id="dw-pop" class="download-popover" hidden>
+                                <div class="dw-row"><label class="dw-label">From</label><input type="date" id="dw-start"></div>
+                                <div class="dw-row"><label class="dw-label">To</label><input type="date" id="dw-end"></div>
+                                <div class="dw-row">
+                                    <label class="dw-label">Series</label>
+                                    <select id="dw-series">
+                                        <option value="daily_returns" selected>Daily % Return</option>
+                                        <option value="daily_pv">Daily Portfolio Value</option>
+                                    </select>
+                                </div>
+                                <div class="dw-row">
+                                    <label class="dw-label">Format</label>
+                                    <select id="dw-format">
+                                        <option value="csv" selected>CSV</option>
+                                        <option value="json">JSON</option>
+                                    </select>
+                                </div>
+                                <div class="dw-actions">
+                                    <button id="dw-download" class="refresh-button">Download</button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="chart-controls">
@@ -120,6 +154,28 @@
                 </div>
                 <div class="chart-container">
                     <canvas id="portfolio-chart"></canvas>
+                </div>
+            </div>
+
+            <!-- Risk Metrics Cards -->
+            <div id="risk-cards-row" class="summary-cards">
+                <div class="card">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h3>Corr vs BTC</h3>
+                        <div>
+                            <button type="button" class="time-button risk-toggle active" data-tf="90D">90D</button>
+                            <button type="button" class="time-button risk-toggle" data-tf="SI">SI</button>
+                        </div>
+                    </div>
+                    <div class="value" id="risk-corr">Loading...</div>
+                </div>
+                <div class="card">
+                    <h3>Hit Rate</h3>
+                    <div class="value" id="risk-hit">Loading...</div>
+                </div>
+                <div class="card">
+                    <h3>Max Drawdown</h3>
+                    <div class="value" id="risk-mdd">Loading...</div>
                 </div>
             </div>
 
@@ -148,12 +204,12 @@
                             <tr>
                                 <th>Symbol</th>
                                 <th>Side</th>
-                                <th>Weight %</th>
-                                <th>Notional $</th>
+                                <th class="sortable" data-table="long" data-sort="weight">Weight %</th>
+                                <th class="sortable" data-table="long" data-sort="notional">Notional $</th>
                                 <th>Entry Price</th>
                                 <th>Mark Price</th>
-                                <th>P&L $</th>
-                                <th>P&L %</th>
+                                <th class="sortable" data-table="long" data-sort="pnl">P&L $</th>
+                                <th class="sortable" data-table="long" data-sort="pnl_percent">P&L %</th>
                             </tr>
                         </thead>
                         <tbody id="long-positions">
@@ -171,12 +227,12 @@
                             <tr>
                                 <th>Symbol</th>
                                 <th>Side</th>
-                                <th>Weight %</th>
-                                <th>Notional $</th>
+                                <th class="sortable" data-table="short" data-sort="weight">Weight %</th>
+                                <th class="sortable" data-table="short" data-sort="notional">Notional $</th>
                                 <th>Entry Price</th>
                                 <th>Mark Price</th>
-                                <th>P&L $</th>
-                                <th>P&L %</th>
+                                <th class="sortable" data-table="short" data-sort="pnl">P&L $</th>
+                                <th class="sortable" data-table="short" data-sort="pnl_percent">P&L %</th>
                             </tr>
                         </thead>
                         <tbody id="short-positions">
@@ -211,6 +267,22 @@
         let currentPVPre = null; // Will be loaded from pre_execution.json
         let portfolioChart = null;
 
+        // Strategy handling (three boards) -----------------------------
+        let currentStrategyKey = (typeof localStorage !== 'undefined' && localStorage.getItem('strategy')) || 'unravel';
+        function getStrategyBasePath(key){
+            switch (key) {
+                case 'beta': return '/signal-dashboard/descartes-beta/';
+                case 'ridge': return '/signal-dashboard/descartes-ridge-unravel/';
+                default: return '/signal-dashboard/'; // unravel
+            }
+        }
+        let strategyBasePath = getStrategyBasePath(currentStrategyKey);
+        function s3Path(suffix){
+            if (!suffix) return strategyBasePath;
+            if (suffix.startsWith('/')) suffix = suffix.slice(1);
+            return strategyBasePath + suffix;
+        }
+
         // Update time display
         function updateTime() {
             const now = new Date();
@@ -226,7 +298,7 @@
         async function loadDailyCSV() {
             try {
                 // Find latest post_execution row
-                const response = await fetch('/signal-dashboard/data/portfolio_daily_log.csv');
+                const response = await fetch(s3Path('data/portfolio_daily_log.csv'));
                 const csvText = await response.text();
                 const lines = csvText.split('\n');
                 
@@ -295,7 +367,7 @@
         // Load baseline prices from daily_baseline.json
         async function fetchBaselinePrices(positions) {
             try {
-                const response = await fetch('/signal-dashboard/data/daily_baseline.json');
+                const response = await fetch(s3Path('data/daily_baseline.json'));
                 const baseline = await response.json();
                 return baseline.prices || {};
             } catch (error) {
@@ -308,7 +380,7 @@
         async function loadPVPre() {
             try {
                 console.log('🔍 Loading PV_pre from pre_execution.json...');
-                const response = await fetch('/signal-dashboard/data/pre_execution.json');
+                const response = await fetch(s3Path('data/pre_execution.json'));
                 if (response.ok) {
                     const data = await response.json();
                     const pvPre = parseFloat(data.pv_pre);
@@ -334,7 +406,7 @@
         async function fetchCurrentPrices(positions) {
             try {
                 console.log('🔍 Loading current prices from S3 latest_prices.json...');
-                const response = await fetch('/signal-dashboard/data/latest_prices.json');
+                const response = await fetch(s3Path('data/latest_prices.json'));
                 if (!response.ok) return {};
                 const data = await response.json();
                 const prices = data.prices || {};
@@ -635,7 +707,7 @@
         // Load historical PV data from S3 portfolio_value_log.jsonl
         async function loadHistoricalPVData(timeframe) {
             try {
-                const response = await fetch('/signal-dashboard/data/portfolio_value_log.jsonl');
+                const response = await fetch(s3Path('data/portfolio_value_log.jsonl'));
                 if (!response.ok) {
                     console.log('No S3 PV data available yet');
                     return [];
@@ -1297,11 +1369,8 @@
         // CSV info toggle function
         function toggleCSVInfo() {
             const filename = document.getElementById('csv-filename');
-            if (filename.style.display === 'none') {
-                filename.style.display = 'inline';
-            } else {
-                filename.style.display = 'none';
-            }
+            if (filename.hasAttribute('hidden')) filename.removeAttribute('hidden');
+            else filename.setAttribute('hidden','');
         }
         
         // Update CSV filename when data loads
@@ -1316,7 +1385,7 @@
         async function updateChartFromS3() {
             console.log('🔄 Updating chart from S3 data...');
             try {
-                const response = await fetch('/signal-dashboard/data/portfolio_value_log.jsonl');
+                const response = await fetch(s3Path('data/portfolio_value_log.jsonl'));
                 if (response.ok) {
                     const text = await response.text();
                     const lines = text.trim().split('\n').filter(line => line.trim());
@@ -1353,6 +1422,284 @@
                 // Don't update chart on error, keep current data
             }
         }
+
+        // ==========================
+        // Download Widget (Pre-BTC)
+        // ==========================
+        (function initDownloadWidget(){
+            const toggleBtn = document.getElementById('dw-toggle');
+            const pop = document.getElementById('dw-pop');
+            const dl = document.getElementById('dw-download');
+            if (!toggleBtn || !pop || !dl) return; // widget not present
+
+            function toCsv(rows){
+                if (!rows || rows.length === 0) return '';
+                const headers = Object.keys(rows[0]);
+                const lines = [headers.join(',')];
+                rows.forEach(r=>{
+                    lines.push(headers.map(h=>String(r[h])).join(','));
+                });
+                return lines.join('\n');
+            }
+
+            async function getPvJsonl(){
+                const r = await fetch(s3Path('data/portfolio_value_log.jsonl?cb=') + Date.now(), { cache:'no-store' });
+                if (!r.ok) return '';
+                return await r.text();
+            }
+
+            function computeDailyReturnsFromPVJsonlText(jsonlText) {
+                const lines = (jsonlText||'').trim().split('\n').filter(Boolean);
+                const data = lines.map(l=>{ try { return JSON.parse(l); } catch(e){ return null; } }).filter(Boolean);
+                const byDay = new Map();
+                data.forEach(pt=>{
+                    const ts = pt.timestamp || pt.time || pt.t;
+                    if (!ts) return;
+                    const d = new Date(ts);
+                    const day = d.toISOString().slice(0,10);
+                    const arr = byDay.get(day) || [];
+                    arr.push(pt);
+                    byDay.set(day, arr);
+                });
+                const out = [];
+                for (const [day, arr] of byDay.entries()){
+                    const sorted = arr.slice().sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
+                    const first = sorted[0];
+                    const last = sorted[sorted.length-1];
+                    const pv0 = first.portfolio_value || first.portfolioValue;
+                    const pv1 = last.portfolio_value || last.portfolioValue;
+                    if (typeof pv0 === 'number' && pv0>0 && typeof pv1 === 'number'){
+                        const perf = (pv1 - pv0) / pv0 * 100; // percent
+                        out.push({ Date: day, Performance: Number(perf.toFixed(2)) });
+                    }
+                }
+                return out.sort((a,b)=> a.Date.localeCompare(b.Date));
+            }
+
+            function computeDailyPVFromPVJsonlText(jsonlText){
+                const lines = (jsonlText||'').trim().split('\n').filter(Boolean);
+                const data = lines.map(l=>{ try { return JSON.parse(l); } catch(e){ return null; } }).filter(Boolean);
+                const byDay = new Map();
+                data.forEach(pt=>{
+                    const ts = pt.timestamp; if(!ts) return;
+                    const d = new Date(ts);
+                    const day = d.toISOString().slice(0,10);
+                    const arr = byDay.get(day) || [];
+                    arr.push(pt);
+                    byDay.set(day, arr);
+                });
+                const out = [];
+                for (const [day, arr] of byDay.entries()){
+                    const last = arr.slice().sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).pop();
+                    const pv = last && (last.portfolio_value || last.portfolioValue);
+                    if (typeof pv === 'number') out.push({ Date: day, PV: Number(pv.toFixed(2)) });
+                }
+                return out.sort((a,b)=> a.Date.localeCompare(b.Date));
+            }
+
+            toggleBtn.addEventListener('click', ()=>{
+                pop.hidden = !pop.hidden;
+            });
+            document.addEventListener('click', (e)=>{
+                if (!pop.hidden && !pop.contains(e.target) && e.target!==toggleBtn) {
+                    pop.hidden = true;
+                }
+            });
+
+            dl.addEventListener('click', async ()=>{
+                const series = (document.getElementById('dw-series')||{}).value || 'daily_returns';
+                const fmt = (document.getElementById('dw-format')||{}).value || 'csv';
+                const sEl = document.getElementById('dw-start');
+                const eEl = document.getElementById('dw-end');
+                const start = sEl && sEl.value ? sEl.value : '';
+                const end = eEl && eEl.value ? eEl.value : '';
+                const text = await getPvJsonl();
+                let rows = [];
+                if (series === 'daily_pv') rows = computeDailyPVFromPVJsonlText(text);
+                else rows = computeDailyReturnsFromPVJsonlText(text);
+                if (start) rows = rows.filter(r => (r.Date >= start));
+                if (end) rows = rows.filter(r => (r.Date <= end));
+
+                let blob, filename;
+                if (fmt === 'json') {
+                    blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json;charset=utf-8' });
+                    filename = series + '.json';
+                } else {
+                    // normalize headers for daily_returns as Date,Performance and for daily_pv as Date,PV
+                    const csvRows = rows.map(r=>{
+                        if (series === 'daily_pv') return { Date: r.Date, PV: r.PV };
+                        return { Date: r.Date, Performance: r.Performance };
+                    });
+                    blob = new Blob([toCsv(csvRows)], { type: 'text/csv;charset=utf-8' });
+                    filename = series + '.csv';
+                }
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(()=>URL.revokeObjectURL(url), 500);
+                pop.hidden = true;
+            });
+        })();
+
+        // ==========================
+        // Sorting (Weight, Notional, P&L$, P&L%)
+        // ==========================
+        const tableSortState = { long: { key: null, dir: 'desc' }, short: { key: null, dir: 'desc' } };
+
+        function metricForPosition(position, snapshot){
+            const symbol = (position.ticker || position.ric || position.internal_code).replace('_','');
+            const baseline = snapshot.baselinePrices[symbol];
+            const current = snapshot.currentPrices[symbol];
+            const notional = Math.abs(parseFloat(position.target_notional || 0));
+            const contracts = parseFloat(position.target_contracts || 0);
+            const sideMult = contracts > 0 ? 1 : -1;
+            const weight = (notional / initialCapital) * 100;
+            let pnl = 0, pnlPercent = 0;
+            if (baseline && current){
+                pnl = sideMult * (current - baseline) / baseline * notional;
+                pnlPercent = sideMult * (current - baseline) / baseline * 100;
+            }
+            return { weight, notional, pnl, pnlPercent };
+        }
+
+        function sortPositions(list, snapshot, key, dir){
+            if (!key) return list;
+            const kmap = { weight:'weight', notional:'notional', pnl:'pnl', pnl_percent:'pnlPercent' };
+            const kk = kmap[key] || key;
+            return list.slice().sort((a,b)=>{
+                const ma = metricForPosition(a, snapshot)[kk];
+                const mb = metricForPosition(b, snapshot)[kk];
+                const d = (mb - ma);
+                return dir === 'asc' ? -d : d;
+            });
+        }
+
+        document.addEventListener('click', (e)=>{
+            const th = e.target.closest && e.target.closest('th.sortable');
+            if (!th) return;
+            const table = th.getAttribute('data-table');
+            const key = th.getAttribute('data-sort');
+            const state = tableSortState[table];
+            state.dir = (state.key === key && state.dir === 'desc') ? 'asc' : 'desc';
+            state.key = key;
+            updatePositionsTable(currentPVPre || initialCapital); // reuse renderer
+        });
+
+        // Enhance update to honor sort
+        const originalUpdatePositionsTable = updatePositionsTable;
+        updatePositionsTable = function(referenceCapital){
+            const snapshot = currentSnapshot;
+            if (!snapshot.positions || snapshot.positions.length === 0) return;
+            const longs = snapshot.positions.filter(p=> parseFloat(p.target_contracts) > 0);
+            const shorts = snapshot.positions.filter(p=> parseFloat(p.target_contracts) < 0);
+            const sl = tableSortState.long; const ss = tableSortState.short;
+            const sortedLongs = sortPositions(longs, snapshot, sl.key, sl.dir);
+            const sortedShorts = sortPositions(shorts, snapshot, ss.key, ss.dir);
+            populatePositionTable('long-positions', sortedLongs, snapshot, referenceCapital);
+            populatePositionTable('short-positions', sortedShorts, snapshot, referenceCapital);
+        }
+
+        // ==========================
+        // Risk Cards (Corr/Hit/MDD)
+        // ==========================
+        async function fetchBtcDailyReturnsFromS3() {
+            try {
+                const r = await fetch('https://dfi-signal-dashboard.s3.amazonaws.com/signal-dashboard/benchmarks/btc_daily_returns.csv?cb=' + Date.now(), { cache:'no-store' });
+                if (!r.ok) return [];
+                const text = await r.text();
+                const lines = text.trim().split('\n');
+                const hdr = lines.shift().split(',').map(h=>h.trim().toLowerCase());
+                const di = hdr.indexOf('date');
+                const pi = hdr.indexOf('performance');
+                return lines.filter(Boolean).map(line=>{
+                    const parts = line.split(',');
+                    return { Date: parts[di], Performance: parseFloat(parts[pi]) };
+                }).filter(x=>x.Date && Number.isFinite(x.Performance));
+            } catch(e){ console.error('btc fetch fail', e); return []; }
+        }
+
+        function pearson(x, y){
+            const n = Math.min(x.length, y.length);
+            if (n === 0) return NaN;
+            let sx=0, sy=0, sxx=0, syy=0, sxy=0;
+            for (let i=0;i<n;i++){ const a=x[i], b=y[i]; sx+=a; sy+=b; sxx+=a*a; syy+=b*b; sxy+=a*b; }
+            const cov = sxy/n - (sx/n)*(sy/n);
+            const vx = sxx/n - (sx/n)*(sx/n);
+            const vy = syy/n - (sy/n)*(sy/n);
+            const denom = Math.sqrt(vx*vy);
+            return denom>0 ? (cov/denom) : NaN;
+        }
+
+        function hitRate(rets){
+            if (!rets.length) return 0;
+            const wins = rets.filter(r=> r>0).length;
+            return wins / rets.length * 100;
+        }
+
+        function maxDrawdown(returnsPct){
+            // returnsPct are in percent; convert to decimal
+            const r = returnsPct.map(v=> v/100);
+            let peak = 1, trough = 1, mdd = 0, equity = 1;
+            for (const rr of r){
+                equity *= (1+rr);
+                if (equity>peak) { peak = equity; trough = equity; }
+                if (equity<trough) trough = equity;
+                const dd = (trough/peak - 1);
+                if (dd < mdd) mdd = dd;
+            }
+            return mdd*100; // percent
+        }
+
+        async function updateRiskCards(scope){
+            try {
+                const pvText = await (await fetch('/signal-dashboard/data/portfolio_value_log.jsonl?cb=' + Date.now(), { cache:'no-store' })).text();
+                const stratDaily = computeDailyReturnsFromPVJsonlText(pvText).map(x=>({ Date:x.Date, Performance:x.Performance }));
+                const btcDaily = await fetchBtcDailyReturnsFromS3();
+                // join on date
+                const m = new Map(btcDaily.map(r=>[r.Date, r.Performance]));
+                let joined = stratDaily.filter(r=> m.has(r.Date)).map(r=>({ d:r.Date, s:r.Performance, b:m.get(r.Date) }));
+                if (scope === '90D' && joined.length>90) joined = joined.slice(-90);
+                const s = joined.map(x=>x.s);
+                const b = joined.map(x=>x.b);
+                const corr = pearson(s, b);
+                const hr = hitRate(s);
+                const mdd = maxDrawdown(s);
+                const fmt = (v, dp=2)=> (Number.isFinite(v)? v.toFixed(dp) : 'N/A');
+                document.getElementById('risk-corr').textContent = (Number.isFinite(corr)? fmt(corr,2) : 'N/A');
+                document.getElementById('risk-hit').textContent = `${fmt(hr,1)}%`;
+                document.getElementById('risk-mdd').textContent = `${fmt(mdd,2)}%`;
+            } catch(e){
+                console.error('risk cards error', e);
+            }
+        }
+
+        // risk toggle wiring
+        (function(){
+            const toggles = document.querySelectorAll('.risk-toggle');
+            if (!toggles || toggles.length===0) return;
+            toggles.forEach(btn=> btn.addEventListener('click', ()=>{
+                toggles.forEach(b=> b.classList.remove('active'));
+                btn.classList.add('active');
+                updateRiskCards(btn.getAttribute('data-tf'));
+            }));
+            updateRiskCards('90D');
+        })();
+
+        // Strategy selector wiring -------------------------------------
+        (function(){
+            const sel = document.getElementById('strategy-select');
+            if (!sel) return;
+            sel.value = currentStrategyKey;
+            sel.addEventListener('change', () => {
+                currentStrategyKey = sel.value;
+                if (typeof localStorage !== 'undefined') localStorage.setItem('strategy', currentStrategyKey);
+                strategyBasePath = getStrategyBasePath(currentStrategyKey);
+                // Reload all data for the chosen strategy
+                loadChartData('1D');
+                loadPVPre();
+                loadDailyCSV().then(()=> createSnapshot());
+            });
+        })();
     </script>
     
     <style>

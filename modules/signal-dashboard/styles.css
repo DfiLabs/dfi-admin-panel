@@ -118,6 +118,20 @@ body {
     display: flex;
     align-items: center;
     gap: var(--space-md);
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+}
+
+.logo:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 4px;
+    border-radius: var(--radius-lg);
+}
+
+.logo:hover .logo-main,
+.logo:hover .logo-subtitle {
+    color: var(--primary-color);
 }
 
 .logo-image {
@@ -394,8 +408,8 @@ body {
 /* Summary Cards */
 .summary-cards {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: var(--space-lg);
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--space-md);
     margin-bottom: var(--space-2xl);
 }
 
@@ -551,6 +565,23 @@ body {
     margin-top: var(--space-xs);
 }
 
+/* Compact summary cards to fit 2 rows of 5 on desktop */
+.summary-cards .card {
+    padding: var(--space-lg);
+}
+.summary-cards .card .value {
+    font-size: 2rem;
+}
+.summary-cards .card h3 {
+    font-size: 0.8rem;
+}
+.summary-cards .card .percentage {
+    font-size: 0.9rem;
+}
+.summary-cards .card .subtitle {
+    font-size: 0.7rem;
+}
+
 /* Chart Section - Beautiful Modern Design */
 .chart-section {
     background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.95) 100%);
@@ -690,28 +721,71 @@ body {
     backdrop-filter: blur(10px);
 }
 
-.csv-info {
-    display: flex;
+/* Guardrail: never allow floating csv-info elements outside the header */
+.csv-info { display: none !important; }
+.chart-header .csv-info {
+    display: inline-flex !important;
     align-items: center;
     gap: var(--space-sm);
     padding: var(--space-sm) var(--space-md);
     background: var(--bg-glass);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    cursor: pointer;
+    cursor: default;
     transition: all 0.3s ease;
     font-size: 0.875rem;
     color: var(--text-secondary);
+    position: static !important;
 }
 
-.csv-info:hover {
-    background: var(--bg-tertiary);
-    border-color: var(--border-hover);
+/* Download widget popover */
+.download-widget { position: relative; }
+.download-popover[hidden] { display: none !important; }
+.download-popover {
+    position: absolute;
+    top: 42px;
+    right: 0;
+    width: 280px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+    padding: 12px;
+    z-index: 50;
+}
+.download-popover::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    right: 18px;
+    width: 14px;
+    height: 14px;
+    transform: rotate(45deg);
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    border-left: 1px solid var(--border-color);
+}
+.dw-row { display: grid; grid-template-columns: 80px 1fr; align-items: center; gap: 8px; margin-bottom: 10px; }
+.dw-label { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .06em; }
+.dw-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.download-popover input, .download-popover select { width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-tertiary); color: var(--text-primary); }
+.download-popover button { padding: 8px 10px; border-radius: 8px; }
+
+/* Sortable header arrows */
+th.sortable { cursor: pointer; position: relative; }
+th.sortable::after { content: '\25B4'; position: absolute; right: 10px; opacity: .35; font-size: 10px; transform: translateY(-2px); }
+th.sortable.sort-asc::after { content: '\25B2'; opacity: .85; }
+th.sortable.sort-desc::after { content: '\25BC'; opacity: .85; }
+
+.chart-header .csv-info:hover {
+    background: transparent;
+    border-color: var(--border-color);
 }
 
-.csv-filename {
+.chart-header .csv-filename {
     font-family: 'JetBrains Mono', monospace;
     color: var(--accent-color);
+    position: static !important;
 }
 
 .chart-controls {
@@ -1220,4 +1294,118 @@ tr:hover td {
     .chart-section {
         padding: var(--space-lg);
     }
+    
+    .container {
+        padding: 0 var(--space-xs);
+    }
+    
+    .metrics-grid {
+        gap: var(--space-xs);
+    }
+    
+    .metric-card {
+        padding: var(--space-sm);
+        min-height: 80px;
+    }
+    
+    .metric-value {
+        font-size: 1.25rem;
+    }
+    
+    .metric-label {
+        font-size: 0.7rem;
+    }
+    
+    .chart-container {
+        height: 200px;
+    }
+    
+    .time-button {
+        padding: var(--space-xs) var(--space-sm);
+        font-size: 0.7rem;
+        min-height: 36px;
+    }
+    
+    table {
+        min-width: 600px;
+        font-size: 0.65rem;
+    }
+    
+    th, td {
+        padding: var(--space-xs) 2px;
+    }
+    
+    .symbol-cell {
+        font-size: 0.7rem;
+    }
 }
+
+/* Enhanced Mobile Features */
+@media (max-width: 768px) {
+    /* Add viewport meta tag support */
+    html {
+        -webkit-text-size-adjust: 100%;
+        -ms-text-size-adjust: 100%;
+    }
+    
+    /* Improve touch targets */
+    .time-button, .refresh-button, .csv-info {
+        min-height: 44px;
+        min-width: 44px;
+        touch-action: manipulation;
+    }
+    
+    /* Better scrolling */
+    .table-container {
+        -webkit-overflow-scrolling: touch;
+        scroll-behavior: smooth;
+    }
+    
+    /* Prevent zoom on input focus */
+    input, select, textarea {
+        font-size: 16px;
+    }
+    
+    /* Stack cards vertically on mobile */
+    .long-short-section {
+        grid-template-columns: 1fr;
+        gap: var(--space-sm);
+    }
+    
+    /* Make progress bars more visible on mobile */
+    .progress-bar {
+        height: 8px;
+        border-radius: 4px;
+    }
+    
+    /* Improve delta indicator visibility */
+    .delta-indicator {
+        width: 20px;
+        height: 20px;
+    }
+    
+    /* Better spacing for mobile */
+    .net-delta-section {
+        padding: var(--space-md) var(--space-sm);
+        margin: var(--space-sm) 0;
+    }
+    
+    .net-delta-content {
+        flex-direction: column;
+        text-align: center;
+        gap: var(--space-sm);
+    }
+    
+    /* Mobile-friendly table headers */
+    th {
+        position: sticky;
+        top: 0;
+        background: var(--bg-secondary);
+        z-index: 10;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+}
+
+/* Force light theme on mobile (remove dark overrides) */
+/* Intentionally left blank to keep light theme consistently */
+#risk-cards-row.summary-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
