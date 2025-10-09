@@ -1380,8 +1380,8 @@ tr:hover td {
     
     /* Improve delta indicator visibility */
     .delta-indicator {
-        width: 20px;
-        height: 20px;
+    width: 20px;
+    height: 20px;
     }
     
     /* Better spacing for mobile */

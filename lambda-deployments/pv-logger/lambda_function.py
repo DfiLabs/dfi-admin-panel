@@ -210,8 +210,8 @@ def lambda_handler(event, context):
                 current_price = current_prices.get(symbol)
                 
                 try:
-                    notional = float(position.get('target_notional', 0))
-                    contracts = float(position.get('target_contracts', 0))
+                notional = float(position.get('target_notional', 0))
+                contracts = float(position.get('target_contracts', 0))
                 except (ValueError, TypeError):
                     continue
 
