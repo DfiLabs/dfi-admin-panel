@@ -1290,16 +1290,13 @@
                 console.log('📊 First data point:', data[0]);
                 console.log('📊 Last data point:', data[data.length - 1]);
 
-                // Update cards from last S3 record
+                // Update cards from last S3 record (do NOT overwrite PV; PV = pv_pre + dailyPnL)
                 try {
                     const last = data[data.length - 1] || {};
-                    if (last && typeof last.portfolio_value === 'number') {
-                        currentSnapshot.portfolioValue = last.portfolio_value;
-                    }
                     currentSnapshot.s3DailyPnL = (typeof last.daily_pnl === 'number') ? last.daily_pnl : null;
                     currentSnapshot.s3TotalPnL = (typeof last.total_pnl === 'number') ? last.total_pnl : null;
                 } catch (e) {
-                    console.warn('⚠️ Failed to update cards from S3 last record', e);
+                    console.warn('⚠️ Failed to update S3 daily/total fields', e);
                 }
                 
                 // Filter by timeframe - be more aggressive about filtering
@@ -2346,8 +2343,8 @@
         // Initialize mobile optimizations
         initMobileOptimizations();
         
-        // Load historical PV data from S3 first, THEN load CSV and start snapshots
-        loadHistoricalPVData('1D').then(historicalData => {
+            // Load historical PV data from S3 first, THEN load CSV and start snapshots
+            loadHistoricalPVData('1D').then(historicalData => {
             console.log(`📊 Loaded ${historicalData.length} historical PV points from S3`);
             console.log('📊 S3 Data:', historicalData);
             pvLogs = historicalData;
@@ -2370,7 +2367,7 @@
                 try { renderMonthlyTable(); } catch(e) { console.error('Monthly table error', e); }
             }
 
-            // Load PV_pre for accurate percentage calculations
+            // Load PV_pre for accurate percentage calculations (do this early)
             loadPVPre().then(() => {
                 console.log('📊 PV_pre loaded for percentage calculations');
             }).catch(error => {
@@ -2389,8 +2386,8 @@
                 // Poll every 2 minutes to avoid missing the fresh daily file
                 setInterval(checkForNewCSV, 2 * 60 * 1000);
                 
-                // Update chart every 5 minutes with fresh S3 data
-                setInterval(updateChartFromS3, 5 * 60 * 1000);
+                // Update chart every 2 minutes with fresh S3 data
+                setInterval(updateChartFromS3, 2 * 60 * 1000);
             });
             
         }).catch(error => {
@@ -2533,8 +2530,28 @@
                 const timeframe = activeButton ? activeButton.textContent : '1D';
                 let displayData;
                 if (timeframe === '1D') {
-                    // Intraday JSONL for 1D only
-                    displayData = s3Data;
+                    // Intraday JSONL for 1D only, but rebase Y values to pv_pre + intraday Δ
+                    if (typeof currentPVPre === 'number' && isFinite(currentPVPre)) {
+                        try {
+                            const first = s3Data.find(Boolean);
+                            const firstPv = first ? (first.portfolio_value ?? first.portfolioValue) : null;
+                            displayData = s3Data.map((pt) => {
+                                const pv = (pt.portfolio_value ?? pt.portfolioValue);
+                                // If S3 sends absolute PV, convert to delta relative to first point, then rebase to pv_pre
+                                if (typeof pv === 'number' && typeof firstPv === 'number') {
+                                    const delta = pv - firstPv; // absolute delta across the day
+                                    return { timestamp: pt.timestamp, portfolio_value: currentPVPre + delta };
+                                }
+                                // If S3 provides daily_pnl, use it directly
+                                if (typeof pt.daily_pnl === 'number') {
+                                    return { timestamp: pt.timestamp, portfolio_value: currentPVPre + pt.daily_pnl };
+                                }
+                                return { timestamp: pt.timestamp, portfolio_value: currentPVPre };
+                            });
+                        } catch(e){ displayData = s3Data; }
+                    } else {
+                        displayData = s3Data;
+                    }
                 } else {
                     // Canonical EOD PV from CSV for long windows
                     displayData = await loadHistoricalPVData(timeframe);
