@@ -274,7 +274,11 @@
                 <div class="card" data-formula-key="risk-hit">
                     <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
                         <h3>Hit Rate</h3>
-                        <button type="button" class="icon-info" data-info="hit" title="What is this?">i</button>
+                        <div class="card-controls" style="display:flex; align-items:center; gap:6px;">
+                            <button type="button" class="icon-info" data-info="hit" title="What is this?">i</button>
+                            <button type="button" class="time-button risk-toggle" data-tf="90D">90D</button>
+                            <button type="button" class="time-button risk-toggle active" data-tf="SI">SI</button>
+                        </div>
                     </div>
                     <div class="value" id="risk-hit">Loading...</div>
                 </div>
@@ -284,7 +288,7 @@
                         <div class="card-controls" style="display:flex; align-items:center; gap:6px;">
                             <button type="button" class="icon-info" data-info="mdd" title="What is this?">i</button>
                             <button type="button" class="time-button risk-toggle" data-tf="90D">90D</button>
-                            <button type="button" class="time-button risk-toggle" data-tf="SI">SI</button>
+                            <button type="button" class="time-button risk-toggle active" data-tf="SI">SI</button>
                         </div>
                     </div>
                     <div class="value" id="risk-mdd" title="Daily EOD close-to-close max peak-to-trough over selected scope">Loading...</div>
@@ -815,6 +819,24 @@
             } catch(e){ console.error('btc fetch fail', e); return []; }
         }
 
+        // EOD CSV → daily % returns as numbers
+        async function loadEodDailyReturnsPct(){
+            try {
+                const r = await fetch(`${DATA_PREFIX}eod_pv.csv?cb=${Date.now()}`, { cache:'no-store' });
+                if (!r.ok) return [];
+                const txt = await r.text();
+                const lines = txt.trim().split('\n');
+                if (lines.length && /pv/i.test(lines[0]) && /date/i.test(lines[0])) lines.shift();
+                const rows = lines.map(l=>{ const [d,p]=l.split(','); return { d, p:Number(p) }; }).filter(x=>x.d && Number.isFinite(x.p));
+                const out = [];
+                for (let i=1;i<rows.length;i++){
+                    const ret = (rows[i].p/rows[i-1].p - 1) * 100;
+                    out.push({ Date: rows[i].d, Performance: parseFloat(ret.toFixed(2)) });
+                }
+                return out;
+            } catch(e){ console.error('eod daily returns fail', e); return []; }
+        }
+
         function computeDailyReturnsFromPVJsonlText(jsonlText){
             // Compute close-to-close daily returns from PV JSONL
             const lines = (jsonlText||'').trim().split('\n').filter(Boolean);
@@ -878,30 +900,28 @@
             return mdd*100;
         }
 
-        async function updateRiskCards(scope){
+        async function updateRiskCards(){
             try {
-                // Strategy daily from PV log (strategy-aware via DATA_PREFIX)
-                const res = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache: 'no-store' });
-                if (!res.ok){
-                    ['risk-corr','risk-hit','risk-mdd'].forEach(id=>{ const el = document.getElementById(id); if (el) el.textContent = 'N/A'; });
-                    return;
-                }
-                const pvText = await res.text();
-                const stratDaily = computeDailyReturnsFromPVJsonlText(pvText).map(x=>({ Date:x.Date, Performance:x.Performance }));
+                // Strategy daily returns from EOD CSV (stable, full history)
+                const stratDaily = await loadEodDailyReturnsPct();
 
                 // BTC benchmark (single path)
                 const btcDaily = await fetchBtcDailyReturnsFromS3();
                 const byDate = new Map(btcDaily.map(r=> [r.Date, r.Performance]));
+                // Read scopes per-card
+                const corrScope = (document.querySelector('[data-formula-key="risk-corr"] .risk-toggle.active')?.getAttribute('data-tf') || '90D');
+                const hitScope = (document.querySelector('[data-formula-key="risk-hit"] .risk-toggle.active')?.getAttribute('data-tf') || 'SI');
+                const mddScope = (document.querySelector('[data-formula-key="risk-mdd"] .risk-toggle.active')?.getAttribute('data-tf') || 'SI');
                 // Correlation uses intersection with BTC
                 let joined = stratDaily.filter(r=> byDate.has(r.Date)).map(r=> ({ d:r.Date, s:r.Performance, b:byDate.get(r.Date) }));
-                if (scope === '90D' && joined.length>90) joined = joined.slice(-90);
+                if (corrScope === '90D' && joined.length>90) joined = joined.slice(-90);
                 const s_corr = joined.map(x=> x.s);
                 const b = joined.map(x=> x.b);
                 const corr = pearson(s_corr, b);
 
-                // Hit Rate respects selected scope; MDD is ALWAYS since inception (SI)
+                // Hit Rate respects its selected scope
                 let s_hr = stratDaily.map(r=> r.Performance);
-                if (scope === '90D' && s_hr.length>90) s_hr = s_hr.slice(-90);
+                if (hitScope === '90D' && s_hr.length>90) s_hr = s_hr.slice(-90);
                 const hr = hitRate(s_hr);
                 const s_full = stratDaily.map(r=> r.Performance);
                 const mdd = maxDrawdown(s_full);
@@ -909,7 +929,11 @@
                 const corrEl = document.getElementById('risk-corr'); if (corrEl) corrEl.textContent = (Number.isFinite(corr)? fmt(corr,2) : 'N/A');
                 const hitEl = document.getElementById('risk-hit'); if (hitEl) hitEl.textContent = `${fmt(hr,1)}%`;
                 const mddEl = document.getElementById('risk-mdd'); if (mddEl) mddEl.textContent = `${fmt(mdd,2)}%`;
-                const scopeEl = document.getElementById('risk-mdd-scope'); if (scopeEl) scopeEl.textContent = `(SI)`;
+                // Update max drawdown for selected scope (independent)
+                let s_mdd = stratDaily.map(r=> r.Performance);
+                if (mddScope === '90D' && s_mdd.length>90) s_mdd = s_mdd.slice(-90);
+                const mddScoped = maxDrawdown(s_mdd);
+                const mddElScoped = document.getElementById('risk-mdd'); if (mddElScoped) mddElScoped.textContent = `${fmt(mddScoped,2)}%`;
             } catch (e){
                 console.error('risk cards error', e);
             }
@@ -989,15 +1013,26 @@
             // Update risk cards if present (use last selected scope or default 90D)
             const hasRisk = document.getElementById('risk-cards-row');
             if (hasRisk) {
-                const active = document.querySelector('.risk-toggle.active');
-                const scope = active ? active.getAttribute('data-tf') : '90D';
-                updateRiskCards(scope);
+                // Initialize per-card default toggles
+                // Set Corr default 90D
+                const corr90 = document.querySelector('[data-formula-key="risk-corr"] .risk-toggle[data-tf="90D"]');
+                if (corr90) corr90.classList.add('active');
+                // Set Hit default SI
+                const hitSI = document.querySelector('[data-formula-key="risk-hit"] .risk-toggle[data-tf="SI"]');
+                if (hitSI) hitSI.classList.add('active');
+                // Set MDD default SI
+                const mddSI = document.querySelector('[data-formula-key="risk-mdd"] .risk-toggle[data-tf="SI"]');
+                if (mddSI) mddSI.classList.add('active');
+
+                updateRiskCards();
                 document.querySelectorAll('.risk-toggle').forEach(btn=>{
                     btn.addEventListener('click',()=>{
-                        document.querySelectorAll('.risk-toggle').forEach(b=> b.classList.remove('active'));
+                        // Toggle within its own card only
+                        const card = btn.closest('.card');
+                        if (!card) return;
+                        card.querySelectorAll('.risk-toggle').forEach(b=> b.classList.remove('active'));
                         btn.classList.add('active');
-                        const tf = btn.getAttribute('data-tf') || '90D';
-                        updateRiskCards(tf);
+                        updateRiskCards();
                     });
                 });
                 // simplified formula tooltips via i icons
@@ -1017,9 +1052,9 @@
                         setTimeout(()=> tip.remove(), 2800);
                     });
                 }
-                explain(corrCard, 'Correlation (daily EOD returns) with BTC over selected scope.');
-                explain(hitCard, 'Hit Rate = fraction of days with positive return over selected scope.');
-                explain(mddCard, 'Max Drawdown = worst peak→trough of equity built from daily close-to-close returns (90D/SI toggle applies).');
+                explain(corrCard, 'Correlation (daily EOD returns) with BTC (90D/SI applies to this card only).');
+                explain(hitCard, 'Hit Rate = fraction of positive days (90D/SI applies to this card only).');
+                explain(mddCard, 'Max Drawdown = worst peak→trough from daily returns (90D/SI applies to this card only).');
             }
 
             // Use S3 Long/Short P&L if available, otherwise calculate
