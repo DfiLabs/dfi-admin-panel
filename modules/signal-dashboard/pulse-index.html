@@ -2205,88 +2205,73 @@
                     try {
                         const fmt = (document.getElementById('dw-format')?.value || 'csv');
                         const series = (document.getElementById('dw-series')?.value || 'daily_returns');
-                        // fetch full PV log
-                        const res = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache: 'no-store' });
-                        if (!res.ok) throw new Error('No PV log');
-                        const text = (await res.text()).trim();
-                        if (!text) throw new Error('Empty PV log');
-                        const rows = text.split('\n').map(l=>{ try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-                        // filter by date range (UTC days)
                         const startStr = dwStart.value;
                         const endStr = dwEnd.value;
-                        const filtered = rows.filter(r => {
-                            const d = new Date(r.timestamp);
-                            const day = d.toISOString().slice(0,10);
-                            if (startStr && day < startStr) return false;
-                            if (endStr && day > endStr) return false;
-                            return true;
-                        });
-                        // group by UTC day
-                        const map = new Map();
-                        filtered.forEach(r => {
-                            const k = new Date(r.timestamp).toISOString().slice(0,10);
-                            const arr = map.get(k) || []; arr.push(r); map.set(k, arr);
-                        });
-                        const days = Array.from(map.keys()).sort();
-                        let out = [];
-                        if (series === 'daily_pv') {
-                            // EOD PV per day (last point of each UTC day)
-                            days.forEach(k => {
-                                const pts = map.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp));
-                                const pvClose = pts[pts.length-1]?.portfolio_value;
-                                if (typeof pvClose === 'number') out.push({ Date:k, PV: pvClose });
-                            });
-                        } else if (series === 'daily_vs_btc') {
-                            // Strategy daily returns and BTC daily returns side-by-side
-                            // Build strategy daily returns first (close-to-close)
-                            const strat = [];
-                            let prevClose = null;
-                            days.forEach(k => {
-                                const pts = map.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp));
-                                const pvClose = pts[pts.length-1]?.portfolio_value;
-                                if (typeof pvClose === 'number') {
-                                    if (typeof prevClose === 'number' && prevClose > 0) {
-                                        const r = (pvClose / prevClose - 1) * 100;
-                                        strat.push({ Date:k, Strat:r.toFixed(2) });
-                                    } else {
-                                        strat.push({ Date:k, Strat:(0).toFixed(2) });
-                                    }
-                                    prevClose = pvClose;
-                                }
-                            });
-                            // Load BTC benchmark returns
-                            const btcCsv = await fetch('/signal-dashboard/benchmarks/btc_daily_returns.csv?cb=' + Date.now(), { cache:'no-store' }).then(r=>r.ok?r.text():Promise.resolve(''));
-                            const btcMap = new Map();
-                            if (btcCsv) {
-                                const bl = btcCsv.trim().split('\n');
-                                const header = bl.shift();
-                                bl.forEach(line=>{ const [d,p] = line.split(','); if (d) btcMap.set(d, p); });
-                            }
-                            // Join on Date
-                            out = strat.map(r=> ({ Date:r.Date, Performance:r.Strat, BTC_Perf:(btcMap.get(r.Date) ?? '') }));
-                        } else {
-                            // Daily % return = close(today)/close(yesterday) - 1 (uses EOD closes)
-                            let prevClose = null;
-                            days.forEach(k => {
-                                const pts = map.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp));
-                                const pvClose = pts[pts.length-1]?.portfolio_value;
-                                if (typeof pvClose === 'number') {
-                                    if (typeof prevClose === 'number' && prevClose > 0) {
-                                        const r = (pvClose / prevClose - 1) * 100;
-                                        out.push({ Date:k, Performance: r.toFixed(2) });
-                                    } else {
-                                        // First day: report 0.00 to keep CSV shape
-                                        out.push({ Date:k, Performance: (0).toFixed(2) });
-                                    }
-                                    prevClose = pvClose;
-                                }
+
+                        // Load canonical EOD PV history (full history)
+                        const eodUrl = `${DATA_PREFIX}eod_pv.csv?cb=${Date.now()}`;
+                        console.log('⬇️ Download request:', { series, fmt, eodUrl, startStr, endStr });
+                        const eodText = await fetch(eodUrl, { cache: 'no-store' }).then(r => r.ok ? r.text() : '');
+
+                        let eod = [];
+                        if (eodText) {
+                            const lines = eodText.trim().split('\n');
+                            const header = (lines[0] || '').toLowerCase();
+                            if (header.includes('date') && header.includes('pv')) lines.shift();
+                            lines.forEach(line => {
+                                const [d, pvRaw] = line.split(',');
+                                const pv = Number(pvRaw);
+                                if (d && !Number.isNaN(pv)) eod.push({ Date: d.trim(), PV: pv });
                             });
                         }
+
+                        if (!eod.length) {
+                            throw new Error('No EOD PV history available');
+                        }
+
+                        // Filter by requested date range (inclusive)
+                        const eodFiltered = eod.filter(r => (!startStr || r.Date >= startStr) && (!endStr || r.Date <= endStr));
+
+                        let out = [];
+                        if (series === 'daily_pv') {
+                            out = eodFiltered;
+                        } else {
+                            // Compute strategy daily % returns from EOD PV closes
+                            let prev = null;
+                            const returns = [];
+                            eodFiltered.forEach(r => {
+                                if (typeof prev === 'number' && prev > 0) {
+                                    const ret = (r.PV / prev - 1) * 100;
+                                    returns.push({ Date: r.Date, Performance: ret.toFixed(2) });
+                                } else {
+                                    returns.push({ Date: r.Date, Performance: (0).toFixed(2) });
+                                }
+                                prev = r.PV;
+                            });
+
+                            if (series === 'daily_vs_btc') {
+                                // Join with BTC daily returns (best-effort)
+                                const btcUrl = '/signal-dashboard/benchmarks/btc_daily_returns.csv?cb=' + Date.now();
+                                const btcText = await fetch(btcUrl, { cache: 'no-store' }).then(r => r.ok ? r.text() : '');
+                                const btcMap = new Map();
+                                if (btcText) {
+                                    const bl = btcText.trim().split('\n');
+                                    const h = (bl[0] || '').toLowerCase();
+                                    if (h.includes('date')) bl.shift();
+                                    bl.forEach(line => { const [d, p] = line.split(','); if (d) btcMap.set(d.trim(), String(p ?? '').trim()); });
+                                }
+                                out = returns.map(r => ({ Date: r.Date, Performance: r.Performance, BTC_Performance: (btcMap.get(r.Date) ?? '') }));
+                            } else {
+                                out = returns;
+                            }
+                        }
+
+                        // Emit file
                         if (fmt === 'json') {
-                            const blob = new Blob([JSON.stringify(out,null,2)], {type:'application/json'});
+                            const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
                             const url = URL.createObjectURL(blob);
-                            const name = (series==='daily_pv' ? 'daily_pv' : 'daily_returns');
-                            const a = Object.assign(document.createElement('a'), { href:url, download:`${name}_${(dwStart.value||'ALL')}_to_${(dwEnd.value||'TODAY')}.json` });
+                            const base = (series==='daily_pv') ? 'daily_pv' : (series==='daily_vs_btc' ? 'daily_vs_btc' : 'daily_returns');
+                            const a = Object.assign(document.createElement('a'), { href: url, download: `${base}_${(startStr||'ALL')}_to_${(endStr||'TODAY')}.json` });
                             document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
                         } else {
                             let header, lines;
@@ -2295,16 +2280,16 @@
                                 lines = out.map(r => `${r.Date},${r.PV}`);
                             } else if (series === 'daily_vs_btc') {
                                 header = 'Date,Performance,BTC_Performance';
-                                lines = out.map(r => `${r.Date},${r.Performance},${r.BTC_Perf}`);
+                                lines = out.map(r => `${r.Date},${r.Performance},${r.BTC_Performance}`);
                             } else {
                                 header = 'Date,Performance';
                                 lines = out.map(r => `${r.Date},${r.Performance}`);
                             }
                             const csv = [header].concat(lines).join('\n');
-                            const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+                            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
                             const url = URL.createObjectURL(blob);
-                            const name = (series==='daily_pv' ? 'daily_pv' : (series==='daily_vs_btc'?'daily_vs_btc':'daily_returns'));
-                            const a = Object.assign(document.createElement('a'), { href:url, download:`${name}_${(dwStart.value||'ALL')}_to_${(dwEnd.value||'TODAY')}.csv` });
+                            const base = (series==='daily_pv') ? 'daily_pv' : (series==='daily_vs_btc' ? 'daily_vs_btc' : 'daily_returns');
+                            const a = Object.assign(document.createElement('a'), { href: url, download: `${base}_${(startStr||'ALL')}_to_${(endStr||'TODAY')}.csv` });
                             document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
                         }
                     } catch (e) {
