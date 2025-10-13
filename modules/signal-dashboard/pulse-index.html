@@ -2236,18 +2236,24 @@
                         if (series === 'daily_pv') {
                             out = eodFiltered;
                         } else {
-                            // Compute strategy daily % returns from EOD PV closes
-                            let prev = null;
-                            const returns = [];
-                            eodFiltered.forEach(r => {
-                                if (typeof prev === 'number' && prev > 0) {
-                                    const ret = (r.PV / prev - 1) * 100;
-                                    returns.push({ Date: r.Date, Performance: ret.toFixed(2) });
+                            // Compute strategy daily % returns from FULL history,
+                            // then slice to requested date range so the first day in-range
+                            // uses the previous day's EOD (not 0.00).
+                            const sortedAll = [...eod].sort((a,b)=> a.Date.localeCompare(b.Date));
+                            let prevCloseAll = null;
+                            const returnByDate = new Map();
+                            sortedAll.forEach(r => {
+                                let perf;
+                                if (typeof prevCloseAll === 'number' && prevCloseAll > 0) {
+                                    perf = ((r.PV / prevCloseAll) - 1) * 100;
                                 } else {
-                                    returns.push({ Date: r.Date, Performance: (0).toFixed(2) });
+                                    perf = 0; // earliest day only
                                 }
-                                prev = r.PV;
+                                returnByDate.set(r.Date, perf.toFixed(2));
+                                prevCloseAll = r.PV;
                             });
+
+                            const returns = eodFiltered.map(r => ({ Date: r.Date, Performance: returnByDate.get(r.Date) ?? '0.00' }));
 
                             if (series === 'daily_vs_btc') {
                                 // Join with BTC daily returns (best-effort)
