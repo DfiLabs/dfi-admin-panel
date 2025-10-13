@@ -409,6 +409,7 @@
             window.referenceCapital = initialCapital;
         }
         let currentPVPre = null; // Will be loaded from pre_execution.json
+        try { window.currentPVPre = null; } catch(_) {}
         let portfolioChart = null;
         let currentTimeframe = '1D';
 
@@ -540,29 +541,24 @@
             }
         }
         
-        // Load PV_pre from pre_execution.json for accurate percentage calculations
+        // Load PV_pre from pre_execution.json and expose on window
         async function loadPVPre() {
             try {
                 console.log('🔍 Loading PV_pre from pre_execution.json...');
                 const response = await fetch(`${DATA_PREFIX}pre_execution.json?cb=${Date.now()}`, { cache: 'no-store' });
-                if (response.ok) {
-                    const data = await response.json();
-                    const pvPre = parseFloat(data.pv_pre);
-                    if (pvPre && pvPre > 0) {
-                        currentPVPre = pvPre;
-                        console.log(`📊 Loaded PV_pre: $${pvPre.toFixed(2)}`);
-                        return pvPre;
-                    } else {
-                        console.log('⚠️ Invalid PV_pre in pre_execution.json, using initial capital');
-                        return initialCapital;
-                    }
-                } else {
-                    console.log('⚠️ No pre_execution.json available, using initial capital');
-                    return initialCapital;
-                }
+                if (!response.ok) throw new Error(`pre_execution.json ${response.status}`);
+                const data = await response.json();
+                const num = Number(data.pv_pre);
+                const pvPre = (Number.isFinite(num) && num > 0) ? num : initialCapital;
+                currentPVPre = pvPre;
+                try { window.currentPVPre = pvPre; } catch(_){ }
+                console.log(`📊 Loaded PV_pre: $${pvPre.toFixed(2)}`);
+                return pvPre;
             } catch (error) {
-                console.error('Error loading PV_pre:', error);
-                return initialCapital; // Fallback to initial capital
+                console.warn('⚠️ PV_pre fallback to initial capital:', error);
+                currentPVPre = initialCapital;
+                try { window.currentPVPre = currentPVPre; } catch(_){ }
+                return currentPVPre;
             }
         }
 
@@ -2530,39 +2526,27 @@
                 const timeframe = activeButton ? activeButton.textContent : '1D';
                 let displayData;
                 if (timeframe === '1D') {
-                    // Intraday JSONL for 1D only, but rebase Y values to pv_pre + intraday Δ
-                    if (typeof currentPVPre === 'number' && isFinite(currentPVPre)) {
-                        try {
-                            const first = s3Data.find(Boolean);
-                            const firstPv = first ? (first.portfolio_value ?? first.portfolioValue) : null;
-                            displayData = s3Data.map((pt) => {
-                                const pv = (pt.portfolio_value ?? pt.portfolioValue);
-                                // If S3 sends absolute PV, convert to delta relative to first point, then rebase to pv_pre
-                                if (typeof pv === 'number' && typeof firstPv === 'number') {
-                                    const delta = pv - firstPv; // absolute delta across the day
-                                    return { timestamp: pt.timestamp, portfolio_value: currentPVPre + delta };
-                                }
-                                // If S3 provides daily_pnl, use it directly
-                                if (typeof pt.daily_pnl === 'number') {
-                                    return { timestamp: pt.timestamp, portfolio_value: currentPVPre + pt.daily_pnl };
-                                }
-                                return { timestamp: pt.timestamp, portfolio_value: currentPVPre };
-                            });
-                            // Fallback: if S3 has no useful points, draw a simple line from pv_pre to pv_pre+daily
-                            if (!displayData || displayData.length === 0) {
-                                const nowIso = new Date().toISOString();
-                                const todayMidUtc = new Date();
-                                todayMidUtc.setUTCHours(0,30,0,0); // ~00:30 UTC
-                                const pvNow = currentPVPre + (typeof currentSnapshot?.dailyPnL === 'number' ? currentSnapshot.dailyPnL : 0);
-                                displayData = [
-                                    { timestamp: todayMidUtc.toISOString(), portfolio_value: currentPVPre },
-                                    { timestamp: nowIso, portfolio_value: pvNow }
-                                ];
+                    // For 1D: show raw PV every 5 minutes from S3 JSONL, and append current PV as final point
+                    displayData = s3Data.map(pt => ({ timestamp: pt.timestamp, portfolio_value: (pt.portfolio_value ?? pt.portfolioValue) })).filter(d => typeof d.portfolio_value === 'number');
+                    try {
+                        const now = new Date();
+                        const last = displayData[displayData.length-1];
+                        let nowPv = null;
+                        if (typeof currentSnapshot?.s3DailyPnL === 'number' && isFinite(currentSnapshot.s3DailyPnL) && typeof currentPVPre === 'number') {
+                            nowPv = currentPVPre + currentSnapshot.s3DailyPnL;
+                        } else if (typeof currentSnapshot?.dailyPnL === 'number' && isFinite(currentSnapshot.dailyPnL) && typeof currentPVPre === 'number') {
+                            nowPv = currentPVPre + currentSnapshot.dailyPnL;
+                        }
+                        if (nowPv !== null) {
+                            const lastTs = last ? new Date(last.timestamp).getTime() : 0;
+                            const nowTs = now.getTime();
+                            if (nowTs - lastTs > 60 * 1000) {
+                                displayData = displayData.concat([{ timestamp: now.toISOString(), portfolio_value: nowPv }]);
+                            } else {
+                                displayData[displayData.length-1] = { timestamp: now.toISOString(), portfolio_value: nowPv };
                             }
-                        } catch(e){ displayData = s3Data; }
-                    } else {
-                        displayData = s3Data;
-                    }
+                        }
+                    } catch(_) {}
                 } else {
                     // Canonical EOD PV from CSV for long windows
                     displayData = await loadHistoricalPVData(timeframe);

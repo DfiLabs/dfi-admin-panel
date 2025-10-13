@@ -9,8 +9,9 @@ import boto3
 import zipfile
 import io
 import os
+import argparse
 
-LAMBDA_FUNCTION_NAME = 'pv-logger'
+DEFAULT_FUNCTION_NAME = 'pulse-pv-logger'
 REGION = 'eu-west-3'
 
 def create_updated_lambda_code():
@@ -33,9 +34,9 @@ import os
 import csv
 import io
 
-# Configuration
+# Configuration (env-driven; defaults point to Pulse)
 S3_BUCKET = os.environ.get("S3_BUCKET", "dfi-signal-dashboard")
-S3_KEY_PREFIX = "signal-dashboard/data/"
+S3_KEY_PREFIX = os.environ.get("S3_KEY_PREFIX", "descartes-ml/signal-dashboard/data/")
 
 def log(msg: str) -> None:
     """Simple logging function for Lambda."""
@@ -216,7 +217,7 @@ def lambda_handler(event, context):
     
     return lambda_code
 
-def update_lambda_function():
+def update_lambda_function(function_name: str):
     """Update the Lambda function with synchronized calculation logic"""
     
     print("🔄 Creating updated Lambda function code...")
@@ -238,10 +239,7 @@ def update_lambda_function():
     try:
         lambda_client = boto3.client('lambda', region_name=REGION)
         
-        response = lambda_client.update_function_code(
-            FunctionName=LAMBDA_FUNCTION_NAME,
-            ZipFile=zip_content
-        )
+        response = lambda_client.update_function_code(FunctionName=function_name, ZipFile=zip_content)
         
         print(f"✅ Lambda function updated successfully")
         print(f"📊 Function ARN: {response.get('FunctionArn')}")
@@ -254,7 +252,11 @@ def update_lambda_function():
         return False
 
 if __name__ == '__main__':
-    success = update_lambda_function()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--function-name', default=DEFAULT_FUNCTION_NAME)
+    args = parser.parse_args()
+    function_name = args.function_name
+    success = update_lambda_function(function_name)
     if success:
         print("\n🎯 Lambda function updated with synchronized calculation logic")
         print("🔄 Next Lambda execution will use identical calculations as dashboard")

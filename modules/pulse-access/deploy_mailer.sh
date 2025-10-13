@@ -51,3 +51,4 @@ aws lambda add-permission --function-name "$FUNC_NAME" --action lambda:InvokeFun
 aws lambda get-function-url-config --function-name "$FUNC_NAME" --query FunctionUrl --output text
 
 
+
