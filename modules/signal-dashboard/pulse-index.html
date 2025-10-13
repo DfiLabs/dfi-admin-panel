@@ -2548,6 +2548,17 @@
                                 }
                                 return { timestamp: pt.timestamp, portfolio_value: currentPVPre };
                             });
+                            // Fallback: if S3 has no useful points, draw a simple line from pv_pre to pv_pre+daily
+                            if (!displayData || displayData.length === 0) {
+                                const nowIso = new Date().toISOString();
+                                const todayMidUtc = new Date();
+                                todayMidUtc.setUTCHours(0,30,0,0); // ~00:30 UTC
+                                const pvNow = currentPVPre + (typeof currentSnapshot?.dailyPnL === 'number' ? currentSnapshot.dailyPnL : 0);
+                                displayData = [
+                                    { timestamp: todayMidUtc.toISOString(), portfolio_value: currentPVPre },
+                                    { timestamp: nowIso, portfolio_value: pvNow }
+                                ];
+                            }
                         } catch(e){ displayData = s3Data; }
                     } else {
                         displayData = s3Data;
