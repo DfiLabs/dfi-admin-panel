@@ -211,6 +211,12 @@
                                     <option value="json">JSON</option>
                                 </select>
                             </div>
+                            <div class="dw-row" id="dw-provisional-row">
+                                <label class="dw-label" style="display:flex;align-items:center;gap:8px;">
+                                    <input type="checkbox" id="dw-provisional" />
+                                    Include today’s provisional return
+                                </label>
+                            </div>
                             <div class="dw-row dw-note">UTC • Strategy-aware</div>
                             <div class="dw-row dw-actions">
                                 <button id="dw-download" class="primary" type="button">Download</button>
@@ -2211,8 +2217,13 @@
                             if (!isNaN(d.getTime())) return d.toISOString().slice(0,10);
                             return '';
                         };
-                        const startStr = normalizeDate(dwStart.value);
-                        const endStr = normalizeDate(dwEnd.value);
+                        let startStr = normalizeDate(dwStart.value);
+                        let endStr = normalizeDate(dwEnd.value);
+                        // If "All" preset is active, ignore any date fields
+                        try {
+                            const activePreset = document.querySelector('.dw-presets button.active')?.dataset?.preset;
+                            if (activePreset === 'all') { startStr = ''; endStr = ''; }
+                        } catch(_) {}
 
                         // Load canonical EOD PV history (full history)
                         const eodUrl = `${DATA_PREFIX}eod_pv.csv?cb=${Date.now()}`;
@@ -2235,33 +2246,75 @@
                             throw new Error('No EOD PV history available');
                         }
 
-                        // Filter by requested date range (inclusive)
-                        const eodFiltered = (!startStr && !endStr)
-                            ? eod // ALL history
-                            : eod.filter(r => (!startStr || r.Date >= startStr) && (!endStr || r.Date <= endStr));
+                        // Resolve window: preset wins over manual dates
+                        let eodFiltered;
+                        let presetDays = null;
+                        try {
+                            const p = document.querySelector('.dw-presets button.active')?.dataset?.preset;
+                            if (p === '7' || p === '30' || p === '90') presetDays = Number(p);
+                        } catch(_) {}
+                        if (presetDays) {
+                            eodFiltered = eod.slice(-presetDays);
+                        } else if (!startStr && !endStr) {
+                            eodFiltered = eod; // ALL
+                        } else {
+                            eodFiltered = eod.filter(r => (!startStr || r.Date >= startStr) && (!endStr || r.Date <= endStr));
+                        }
 
                         let out = [];
                         if (series === 'daily_pv') {
                             out = eodFiltered;
-                        } else {
-                            // Compute strategy daily % returns from FULL history,
-                            // then slice to requested date range so the first day in-range
-                            // uses the previous day's EOD (not 0.00).
-                            const sortedAll = [...eod].sort((a,b)=> a.Date.localeCompare(b.Date));
-                            let prevCloseAll = null;
-                            const returnByDate = new Map();
-                            sortedAll.forEach(r => {
-                                let perf;
-                                if (typeof prevCloseAll === 'number' && prevCloseAll > 0) {
-                                    perf = ((r.PV / prevCloseAll) - 1) * 100;
-                                } else {
-                                    perf = 0; // earliest day only
+                            // Append today's last logged PV from JSONL to ensure continuity
+                            try {
+                                const txt = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():"");
+                                if (txt) {
+                                    const lines = txt.trim().split('\n').filter(Boolean);
+                                    const last = JSON.parse(lines[lines.length-1]);
+                                    const pvNow = last.portfolio_value ?? last.portfolioValue;
+                                    const dayNow = new Date(last.timestamp).toISOString().slice(0,10);
+                                    if (typeof pvNow === 'number') {
+                                        const idx = out.findIndex(r => r.Date === dayNow);
+                                        if (idx === -1) {
+                                            out = out.concat([{ Date: dayNow, PV: pvNow }]);
+                                        } else if (Math.abs(out[idx].PV - pvNow) > 1e-6) {
+                                            // keep EOD row and add a final intraday row for today
+                                            out = out.concat([{ Date: dayNow, PV: pvNow }]);
+                                        }
+                                    }
                                 }
-                                returnByDate.set(r.Date, perf.toFixed(2));
-                                prevCloseAll = r.PV;
-                            });
+                            } catch(_) { /* best-effort append only */ }
+                        } else {
+                            // Compute daily % returns strictly within the filtered window
+                            const sorted = [...eodFiltered].sort((a,b)=> a.Date.localeCompare(b.Date));
+                            const returns = [];
+                            for (let i=0;i<sorted.length;i++) {
+                                const d = sorted[i];
+                                if (i === 0) { returns.push({ Date: d.Date, Performance: (0).toFixed(2) }); continue; }
+                                const prev = sorted[i-1];
+                                const ret = (d.PV/prev.PV - 1) * 100;
+                                returns.push({ Date: d.Date, Performance: ret.toFixed(2) });
+                            }
 
-                            const returns = eodFiltered.map(r => ({ Date: r.Date, Performance: returnByDate.get(r.Date) ?? '0.00' }));
+                            // Optionally append today’s provisional return versus yesterday EOD
+                            try {
+                                const wantProv = document.getElementById('dw-provisional')?.checked;
+                                if (wantProv) {
+                                    const lastEod = eod[eod.length-1]; // yesterday’s EOD if we’re before today EOD
+                                    const jl = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
+                                    if (lastEod && jl) {
+                                        const lastLine = JSON.parse(jl.trim().split('\n').filter(Boolean).slice(-1)[0]);
+                                        const pvNow = lastLine.portfolio_value ?? lastLine.portfolioValue;
+                                        const dayNow = new Date(lastLine.timestamp).toISOString().slice(0,10);
+                                        if (typeof pvNow === 'number' && lastEod && lastEod.PV > 0) {
+                                            const retNow = (pvNow/lastEod.PV - 1) * 100;
+                                            // Avoid duplicate if window already ends at dayNow
+                                            if (!returns.length || returns[returns.length-1].Date !== dayNow) {
+                                                returns.push({ Date: dayNow, Performance: retNow.toFixed(2) });
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch(_) { /* best-effort */ }
 
                             if (series === 'daily_vs_btc') {
                                 // Join with BTC daily returns (best-effort)
@@ -2308,6 +2361,7 @@
                         }
                     } catch (e) {
                         console.warn('Download failed', e);
+                        try { alert('Download failed: ' + (e && e.message ? e.message : e)); } catch(_) {}
                     }
                 });
             }
@@ -2679,8 +2733,20 @@
 
         async function ensureMetricsDaily() {
             if (Array.isArray(METRICS_DAILY_ALL)) return METRICS_DAILY_ALL;
-            const pvAll = await loadHistoricalPVData('SI');
-            METRICS_DAILY_ALL = computeDailyReturnsFromPV(pvAll);
+            // Use EOD CSV for stable daily metrics
+            const eodText = await fetch(`${DATA_PREFIX}eod_pv.csv?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
+            const rows = [];
+            if (eodText) {
+                const lines = eodText.trim().split('\n');
+                if (lines.length && /pv/i.test(lines[0]) && /date/i.test(lines[0])) lines.shift();
+                lines.forEach(line => { const [d,p] = line.split(','); if (d && p) rows.push({ d, p: Number(p) }); });
+            }
+            const daily = [];
+            for (let i=1;i<rows.length;i++) {
+                const r = (rows[i].p/rows[i-1].p) - 1; // decimal
+                daily.push(r);
+            }
+            METRICS_DAILY_ALL = daily;
             return METRICS_DAILY_ALL;
         }
 
