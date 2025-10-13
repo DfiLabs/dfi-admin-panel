@@ -368,15 +368,24 @@
                 }
             } catch (e) { /* fail open: never block admin/demo */ }
         })();
-        if (IS_DEMO) {
-            // Force demo to Descartes Diversified only
-            DATA_PREFIX = '/signal-dashboard/data/';
-            try { localStorage.setItem('DATA_PREFIX', DATA_PREFIX); } catch (e) {}
-        }
-        if (IS_PULSE) {
-            // Pulse served via CloudFront default routes: use demo path which is fed pulse data
-            DATA_PREFIX = '/signal-dashboard/data/';
-            try { localStorage.setItem('DATA_PREFIX', DATA_PREFIX); } catch (e) {}
+        // Force Pulse path (CF maps /signal-dashboard/* -> /descartes-ml/signal-dashboard/*)
+        DATA_PREFIX = '/signal-dashboard/data/';
+        try { localStorage.setItem('DATA_PREFIX', DATA_PREFIX); } catch (e) {}
+        console.log('🔗 DATA_PREFIX =', DATA_PREFIX);
+
+        // Helper to resolve a symbol safely from a position row
+        function resolveSymbolFromPosition(p) {
+            try {
+                const raw = (p && (p.symbol || p.ticker || p.ric || p.internal_code || p.name));
+                if (!raw) {
+                    console.log('⚠️ Missing symbol in position row:', p);
+                    return null;
+                }
+                return String(raw).replace('_','').replace('-','');
+            } catch (err) {
+                console.log('⚠️ Error resolving symbol from position:', err, p);
+                return null;
+            }
         }
         let currentSnapshot = {
             timestamp: null,
@@ -535,7 +544,7 @@
         async function loadPVPre() {
             try {
                 console.log('🔍 Loading PV_pre from pre_execution.json...');
-                const response = await fetch(`${DATA_PREFIX}pre_execution.json`);
+                const response = await fetch(`${DATA_PREFIX}pre_execution.json?cb=${Date.now()}`, { cache: 'no-store' });
                 if (response.ok) {
                     const data = await response.json();
                     const pvPre = parseFloat(data.pv_pre);
@@ -583,9 +592,11 @@
                 });
                 if (!response.ok) return {};
                 const data = await response.json();
-                const prices = data.prices || {};
+                console.log('🧾 latest_prices.json payload keys =', Object.keys(data));
+                const prices = data.prices || data || {};
                 const currentPrices = {};
-                const symbols = positions.map(p => (p.ticker || p.ric || p.internal_code).replace('_', ''));
+                const symbols = positions.map(p => resolveSymbolFromPosition(p)).filter(Boolean);
+                console.log('🧩 Resolving currentPrices for symbols =', symbols);
                 symbols.forEach(symbol => {
                     const price = prices[symbol];
                     currentPrices[symbol] = (price !== undefined && price !== null) ? parseFloat(price) : null;
@@ -618,12 +629,15 @@
                         
                         console.log('📊 Latest S3 entry:', latestEntry);
                         
-                        // Use S3 data as authoritative source
+                        // Prefer S3 daily fields when present (do not override PV)
                         currentSnapshot.timestamp = new Date(latestEntry.timestamp);
-                        currentSnapshot.portfolioValue = latestEntry.portfolio_value;
-                        currentSnapshot.dailyPnL = latestEntry.daily_pnl;
-                        currentSnapshot.s3DailyPnL = latestEntry.daily_pnl;
-                        currentSnapshot.s3TotalPnL = latestEntry.total_pnl;
+                        if (typeof latestEntry.daily_pnl === 'number') {
+                            currentSnapshot.dailyPnL = latestEntry.daily_pnl;
+                            currentSnapshot.s3DailyPnL = latestEntry.daily_pnl;
+                        }
+                        if (typeof latestEntry.total_pnl === 'number') {
+                            currentSnapshot.s3TotalPnL = latestEntry.total_pnl;
+                        }
                         
                         // Use audit data for Long/Short breakdown
                         if (latestEntry.audit) {
@@ -687,12 +701,16 @@
             console.log('🔍 Calculating Daily P&L...');
             
             currentSnapshot.positions.forEach((position, index) => {
-                const symbol = (position.ticker || position.ric || position.internal_code).replace('_', '');
+                const symbol = resolveSymbolFromPosition(position);
                 const baselinePrice = currentSnapshot.baselinePrices[symbol];
                 const currentPrice = currentPrices[symbol];
                 const notional = parseFloat(position.target_notional || 0);
                 const side = parseFloat(position.target_contracts) > 0 ? 1 : -1;
                 
+                if (!symbol) {
+                    console.log(`⚠️ Position ${index} has no resolvable symbol`, position);
+                    return;
+                }
                 console.log(`🔍 DEBUG Position ${index}: ${symbol}`, {
                     baselinePrice,
                     currentPrice,
@@ -764,15 +782,11 @@
             
             console.log('🔍 DEBUG: Updated currentSnapshot.dailyPnL =', currentSnapshot.dailyPnL);
             
-            // Only set portfolio value if we don't have S3 data yet
-            // If we have S3 data, keep the real portfolio value from S3 logs
-            if (!currentSnapshot.portfolioValue || currentSnapshot.portfolioValue === initialCapital) {
-                if (typeof dailyPnL === 'number') {
-                    currentSnapshot.portfolioValue = initialCapital + dailyPnL;
-                    console.log('📊 Using calculated Portfolio Value (no S3 data yet)');
-                }
-            } else {
-                console.log(`📊 Keeping S3 Portfolio Value: $${currentSnapshot.portfolioValue.toFixed(2)}`);
+            // Always compute live PV = pv_pre + dailyPnL (Admin logic)
+            if (typeof dailyPnL === 'number' && isFinite(dailyPnL)) {
+                const base = (typeof currentPVPre === 'number' && isFinite(currentPVPre)) ? currentPVPre : initialCapital;
+                currentSnapshot.portfolioValue = base + dailyPnL;
+                console.log(`📊 Using calculated Portfolio Value: base=${base.toFixed(2)} + dailyPnL=${dailyPnL.toFixed(2)} → ${currentSnapshot.portfolioValue.toFixed(2)}`);
             }
             
             // Update UI with this snapshot
@@ -1202,8 +1216,51 @@
             // updateChart();
         }
 
-        // Load historical PV data from S3 portfolio_value_log.jsonl
+        // Load EOD PV from CSV (history), optionally limited to last N days, and append today's live point
+        async function loadEodPVData(limitDays) {
+            try {
+                const r = await fetch(`${DATA_PREFIX}eod_pv.csv?cb=${Date.now()}`, { cache: 'no-store' });
+                if (!r.ok) { console.log('No eod_pv.csv available yet'); return []; }
+                const txt = await r.text();
+                const lines = txt.trim().split('\n').filter(Boolean);
+                // Drop header if present
+                if (lines.length && /pv/i.test(lines[0]) && /date/i.test(lines[0])) lines.shift();
+                const rows = lines.map(line => {
+                    const parts = line.split(',');
+                    const d = (parts[0] || '').trim();
+                    const pv = Number((parts[1] || '').trim());
+                    if (!d || !Number.isFinite(pv)) return null;
+                    // Use end-of-day timestamp for visual consistency
+                    const ts = new Date(`${d}T23:59:59Z`).toISOString();
+                    return { timestamp: ts, portfolio_value: pv };
+                }).filter(Boolean).sort((a,b)=> new Date(a.timestamp) - new Date(b.timestamp));
+                let out = rows;
+                if (Number.isFinite(limitDays)) {
+                    const cutoff = new Date(Date.now() - limitDays * 24 * 60 * 60 * 1000);
+                    out = rows.filter(pt => new Date(pt.timestamp) >= cutoff);
+                }
+                // Append a live point for today if pv_pre and dailyPnL exist
+                if (typeof currentPVPre === 'number' && Number.isFinite(currentPVPre)) {
+                    const livePnL = (typeof currentSnapshot?.dailyPnL === 'number' && isFinite(currentSnapshot.dailyPnL)) ? currentSnapshot.dailyPnL : 0;
+                    const pvNow = currentPVPre + livePnL;
+                    out = out.concat([{ timestamp: new Date().toISOString(), portfolio_value: pvNow }]);
+                }
+                console.log(`📊 Loaded ${out.length} EOD PV points from eod_pv.csv`);
+                return out;
+            } catch (e) {
+                console.error('eod_pv.csv load error', e);
+                return [];
+            }
+        }
+
+        // Load historical PV data
         async function loadHistoricalPVData(timeframe) {
+            // For long windows, prefer canonical EOD PV CSV
+            if (timeframe === '7D' || timeframe === '1M' || timeframe === 'SI') {
+                const days = (timeframe === '7D') ? 7 : (timeframe === '1M' ? 30 : null);
+                const eod = await loadEodPVData(days);
+                return eod;
+            }
             try {
                 const cacheBuster = new Date().getTime();
                 const response = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${cacheBuster}`, {
@@ -2446,56 +2503,45 @@
         async function updateChartFromS3() {
             console.log('🔄 Updating chart from S3 data...');
             try {
-                const cacheBuster = new Date().getTime();
-                const response = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${cacheBuster}`, {
-                    cache: 'no-store'
-                });
-                if (response.ok) {
-                    const text = await response.text();
-                    const lines = text.trim().split('\n').filter(line => line.trim());
-                    const s3Data = lines.map(line => JSON.parse(line));
-                    
-                    // Update pvLogs with fresh S3 data
-                    pvLogs = s3Data;
-                    
-                    // Update portfolio value from latest S3 data
-                    if (s3Data.length > 0) {
-                        const last = s3Data[s3Data.length - 1];
-                        const latestPV = last.portfolio_value || last.portfolioValue;
-                        if (latestPV && currentSnapshot) {
-                            currentSnapshot.portfolioValue = latestPV;
-                            console.log(`📊 Updated Portfolio Value from S3 refresh: $${latestPV.toFixed(2)}`);
-                            
-                            // Also refresh S3-derived totals so Total P&L card stays in sync
-                            if (typeof last.total_pnl === 'number') {
-                                currentSnapshot.s3TotalPnL = last.total_pnl;
-                            }
-                            if (typeof last.daily_pnl === 'number') {
-                                currentSnapshot.s3DailyPnL = last.daily_pnl;
-                            }
-                            
-                            // Update UI with new portfolio value
-                            updateUI();
-                        }
-                    }
-                    
-                    // Update chart with current timeframe only if data has changed
-                    const activeButton = document.querySelector('.time-button.active');
-                    const timeframe = activeButton ? activeButton.textContent : '1D';
-                    updateChart(s3Data, timeframe);
-                    
-                    console.log(`📊 Chart updated with ${s3Data.length} data points from S3`);
-
-                    // Refresh S3-derived metric cards (avg daily return, vol, sharpe)
-                    updateS3MetricsCards();
-                } else {
+                const cacheBuster = Date.now();
+                const response = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${cacheBuster}`, { cache: 'no-store' });
+                if (!response.ok) {
                     console.log('⚠️ No S3 data available yet, keeping current chart');
-                    // Don't update chart if S3 data is not available, keep current data
+                    return;
                 }
+
+                const text = await response.text();
+                const lines = text.trim().split('\n').filter(Boolean);
+                const s3Data = lines.map(line => JSON.parse(line));
+
+                // Update S3-derived totals ONLY (do not override PV; PV = pv_pre + dailyPnL)
+                if (s3Data.length > 0) {
+                    const last = s3Data[s3Data.length - 1];
+                    if (typeof last.total_pnl === 'number') currentSnapshot.s3TotalPnL = last.total_pnl;
+                    if (typeof last.daily_pnl === 'number') currentSnapshot.s3DailyPnL = last.daily_pnl;
+                    updateUI();
+                }
+
+                // Choose data source by timeframe
+                const activeButton = document.querySelector('.time-button.active');
+                const timeframe = activeButton ? activeButton.textContent : '1D';
+                let displayData;
+                if (timeframe === '1D') {
+                    // Intraday JSONL for 1D only
+                    displayData = s3Data;
+                } else {
+                    // Canonical EOD PV from CSV for long windows
+                    displayData = await loadHistoricalPVData(timeframe);
+                }
+
+                updateChart(displayData, timeframe);
+                console.log(`📊 Chart updated for ${timeframe} with ${displayData.length} points`);
+
+                // Refresh S3-derived metric cards (avg daily return, vol, sharpe)
+                updateS3MetricsCards();
             } catch (error) {
                 console.error('Error updating chart from S3:', error);
                 console.log('📊 Keeping current chart data due to error');
-                // Don't update chart on error, keep current data
             }
         }
 
@@ -2885,3 +2931,58 @@
     </style>
 </body>
 </html>
+<script>
+(function(){
+  try {
+    window.PulseDiag = {
+      version: 'pulse-diag-1',
+      seriesSummary: function() {
+        try {
+          var s = window.currentSnapshot || {}; 
+          return {
+            positions: (s.positions||[]).length,
+            baselineKeys: Object.keys(s.baselinePrices||{}).length,
+            currentPriceKeys: Object.keys(s.currentPrices||{}).length,
+            timeframe: window.currentTimeframe || '1D'
+          };
+        } catch(e){ return { error: String(e) }; }
+      },
+      sumDailyPnl: function() {
+        try {
+          var s = window.currentSnapshot || {};
+          var positions = s.positions || [];
+          var bp = s.baselinePrices || {};
+          var cp = s.currentPrices || {};
+          var total = 0, count = 0;
+          for (var i=0;i<positions.length;i++){
+            var p = positions[i];
+            var sym = p.symbol || p.ticker || p.asset || p.name;
+            if (!sym) continue;
+            var b = bp[sym]; var c = cp[sym];
+            if (!b || !c) continue;
+            var side = (typeof p.side === 'number') ? p.side : ((p.contracts||0) >= 0 ? 1 : -1);
+            var notional = Math.abs(p.notional || 0);
+            if (!notional && typeof p.weight === 'number') {
+              var ref = (window.currentPVPre || window.referenceCapital || 1000000);
+              notional = Math.abs(p.weight * ref);
+            }
+            if (!notional) continue;
+            var pnl = side * (c - b) / b * notional;
+            total += pnl; count++;
+          }
+          return { total: +total.toFixed(2), counted: count };
+        } catch(e){ return { error: String(e) }; }
+      },
+      validateDailyPnl: function(){
+        try {
+          var calc = this.sumDailyPnl();
+          var s = window.currentSnapshot || {};
+          var card = (typeof s.dailyPnL === 'number') ? s.dailyPnL : null;
+          var diff = (card!=null && calc.total!=null) ? (card - calc.total) : null;
+          return { ok: diff!=null && Math.abs(diff) < 0.02, calc: calc.total, card: card, diffAbs: diff!=null?+Math.abs(diff).toFixed(2):null };
+        } catch(e){ return { error: String(e) }; }
+      }
+    };
+  } catch(e){}
+})();
+</script>

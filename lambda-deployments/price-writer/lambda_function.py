@@ -17,6 +17,9 @@ import os
 # Configuration - can be overridden by environment variables
 S3_BUCKET = os.environ.get("S3_BUCKET", "dfi-signal-dashboard")
 S3_KEY_PREFIX = os.environ.get("S3_KEY_PREFIX", "signal-dashboard/data/")
+# Mirror writes for demo and pulse so both have identical marks at the same second
+DEMO_KEY_PREFIX = os.environ.get("DEMO_KEY_PREFIX", "signal-dashboard-demo/signal-dashboard/data/")
+PULSE_KEY_PREFIX = os.environ.get("PULSE_KEY_PREFIX", "descartes-ml/signal-dashboard/data/")
 BENCH_PREFIX = os.environ.get("BENCH_PREFIX", "signal-dashboard/benchmarks/")
 BINANCE_FUTURES_API = "https://fapi.binance.com/fapi/v1/premiumIndex"
 BINANCE_SPOT_KLINES = "https://api.binance.com/api/v3/klines"
@@ -170,8 +173,35 @@ def lambda_handler(event, context):
             Bucket=S3_BUCKET,
             Key=S3_KEY_PREFIX + 'latest_prices.json',
             Body=json.dumps(prices_data, indent=2),
-            ContentType='application/json'
+            ContentType='application/json',
+            CacheControl='no-store, max-age=0'
         )
+
+        # Mirror to demo path
+        try:
+            s3_client.put_object(
+                Bucket=S3_BUCKET,
+                Key=DEMO_KEY_PREFIX + 'latest_prices.json',
+                Body=json.dumps(prices_data, indent=2),
+                ContentType='application/json',
+                CacheControl='no-store, max-age=0'
+            )
+            log("✅ Mirrored latest_prices.json to demo path")
+        except Exception as mirror_err:
+            log(f"⚠️ Failed to mirror latest_prices.json to demo path: {mirror_err}")
+
+        # Mirror to pulse path
+        try:
+            s3_client.put_object(
+                Bucket=S3_BUCKET,
+                Key=PULSE_KEY_PREFIX + 'latest_prices.json',
+                Body=json.dumps(prices_data, indent=2),
+                ContentType='application/json',
+                CacheControl='no-store, max-age=0'
+            )
+            log("✅ Mirrored latest_prices.json to pulse path")
+        except Exception as mirror_err2:
+            log(f"⚠️ Failed to mirror latest_prices.json to pulse path: {mirror_err2}")
 
         log("✅ Latest prices updated successfully")
 

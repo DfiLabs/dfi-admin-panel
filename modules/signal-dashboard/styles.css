@@ -65,11 +65,27 @@
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', Roboto, sans-serif;
-    background: var(--bg-primary);
+    background:
+        linear-gradient(180deg, #fafcff 0%, #f8fbff 100%),
+        radial-gradient(1200px 600px at 85% -5%, rgba(118, 75, 162, 0.08) 0%, rgba(118, 75, 162, 0) 60%),
+        radial-gradient(1000px 500px at 5% 25%, rgba(102, 126, 234, 0.06) 0%, rgba(102, 126, 234, 0) 55%);
     color: var(--text-primary);
     line-height: 1.6;
     overflow-x: hidden;
     min-height: 100vh;
+    background-attachment: fixed, fixed, fixed;
+}
+
+/* Subtle decorative layer */
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+        radial-gradient(600px 280px at 90% 10%, rgba(118, 75, 162, 0.07), transparent 65%),
+        radial-gradient(700px 300px at 0% 30%, rgba(102, 126, 234, 0.05), transparent 70%);
+    z-index: -1;
 }
 
 /* Scrollbar Styling */
@@ -386,6 +402,19 @@ body {
 .dashboard-header {
     text-align: center;
     margin-bottom: var(--space-2xl);
+    position: relative;
+}
+.dashboard-header::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: -6px;
+    transform: translateX(-50%);
+    width: min(920px, 92%);
+    height: 180px;
+    background: radial-gradient(700px 180px at 50% 50%, rgba(102,126,234,0.10), rgba(118,75,162,0.05) 55%, transparent 75%);
+    filter: blur(8px);
+    z-index: -1;
 }
 
 .dashboard-header h1 {
@@ -435,6 +464,21 @@ body {
     opacity: 0;
     transition: opacity 0.3s ease;
 }
+
+/* Discreet info icon */
+.icon-info {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+    background: rgba(255,255,255,0.8);
+    color: var(--text-secondary);
+    font-weight: 700;
+    font-size: 12px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.icon-info:hover { border-color: var(--border-hover); color: var(--primary-color); }
 
 .card:hover {
     border-color: var(--border-hover);
@@ -720,6 +764,12 @@ body {
     border: 1px solid rgba(226, 232, 240, 0.6);
     backdrop-filter: blur(10px);
 }
+
+/* Minimal CSV source chip (hidden by default) */
+.csv-info[hidden] { display: none !important; }
+.csv-info { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.8); border: 1px solid var(--border-color); border-radius: 8px; padding: 4px 8px; font-size: 12px; color: #059669; }
+.csv-toggle { border: none; background: transparent; cursor: pointer; margin-left: auto; font-size: 16px; opacity: .6; }
+.csv-toggle:hover { opacity: 0.8; }
 
 /* Guardrail: never allow floating csv-info elements outside the header */
 .csv-info { display: none !important; }

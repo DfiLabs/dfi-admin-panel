@@ -42,48 +42,40 @@ def log(m):
     print('[' + datetime.now(timezone.utc).isoformat() + '] ' + str(m))
 
 def get_pv_pre_before_cutoff(cutoff):
+    # Determine pv_pre using canonical EOD CSV (eod_pv.csv).
+    # We pick the last row with Date < cutoff.date(). If none, we fall back
+    # to the last row. CSV format: Date,PV (headers present)
     try:
-        body = s3.get_object(Bucket=S3_BUCKET, Key=S3_PREFIX + 'portfolio_value_log.jsonl')['Body'].read().decode('utf-8')
+        body = s3.get_object(Bucket=S3_BUCKET, Key=S3_PREFIX + 'eod_pv.csv')['Body'].read().decode('utf-8')
     except Exception as e:
-        log('Failed to read PV log: ' + str(e))
+        log('Failed to read eod_pv.csv: ' + str(e))
         return 1000000.0, 'N/A'
-    pv_pre, ts = None, None
-    for line in body.splitlines():
-        line = line.strip()
-        if not line:
-            continue
+    lines = [ln for ln in (body or '').splitlines() if ln.strip()]
+    if not lines:
+        return 1000000.0, 'N/A'
+    # Drop header if present
+    if 'date' in lines[0].lower():
+        lines = lines[1:]
+    target = None
+    cutoff_day = cutoff.date()
+    for ln in lines:
         try:
-            rec = json.loads(line)
-            ts_s = rec.get('timestamp') or rec.get('ts_utc')
-            if not ts_s:
-                continue
-            dt = datetime.fromisoformat(ts_s.replace('Z','+00:00'))
-            if dt < cutoff:
-                pv_pre = rec.get('portfolio_value') or rec.get('portfolioValue')
-                ts = ts_s
+            d, pv = ln.split(',')[0].strip(), ln.split(',')[1].strip()
+            dt = datetime.fromisoformat(d + 'T00:00:00+00:00')
+            if dt.date() < cutoff_day:
+                target = (d, float(pv))
             else:
                 break
         except Exception:
             continue
-    if pv_pre is None:
-        # Continuity fallback: use the most recent PV in the log if nothing strictly before cutoff
+    if target is None:
+        # fallback to last row
         try:
-            last_pv, last_ts = None, None
-            for line in reversed(body.splitlines()):
-                line = line.strip()
-                if not line:
-                    continue
-                rec = json.loads(line)
-                last_pv = rec.get('portfolio_value') or rec.get('portfolioValue')
-                last_ts = rec.get('timestamp') or rec.get('ts_utc')
-                if last_pv is not None:
-                    break
-            if last_pv is not None:
-                return float(last_pv), last_ts or 'N/A'
+            d, pv = lines[-1].split(',')[0].strip(), lines[-1].split(',')[1].strip()
+            return float(pv), d + 'T23:59:59Z'
         except Exception:
-            pass
-        return 1000000.0, 'N/A'
-    return float(pv_pre), ts
+            return 1000000.0, 'N/A'
+    return float(target[1]), target[0] + 'T23:59:59Z'
 
 def _get_bool(x):
     try:

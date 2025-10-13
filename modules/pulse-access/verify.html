@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DFI Labs — Verifying…</title>
+  <meta name="robots" content="noindex,nofollow" />
+  <script>
+    // In full implementation, the token is verified server-side.
+    // For now, accept any t param and set a 14-day session cookie.
+    (function(){
+      const p = new URLSearchParams(location.search);
+      const t = p.get('t');
+      const email = p.get('email')||'';
+      const name = p.get('name')||'';
+      const entity = p.get('entity')||'';
+      const next = p.get('next') || '/signal-dashboard/';
+      if (t) {
+        // Persist basic audit trail client-side; backend can augment when SES leaves sandbox
+        try {
+          const key = 'pulse_visits';
+          const arr = JSON.parse(localStorage.getItem(key) || '[]');
+          arr.push({ email, name, entity, t, ts: Date.now(), ua: navigator.userAgent });
+          localStorage.setItem(key, JSON.stringify(arr.slice(-100)));
+        } catch(_){}
+        const payload = btoa(JSON.stringify({ email, name, entity, iat: Date.now() }));
+        const expires = new Date(Date.now() + 14*24*60*60*1000).toUTCString();
+        document.cookie = `pulse_session=${payload}; Path=/; Secure; SameSite=Lax; Expires=${expires}`;
+      }
+      location.replace(next);
+    })();
+  </script>
+</head>
+<body>
+  Verifying…
+</body>
+</html>
+
+
+
+l 

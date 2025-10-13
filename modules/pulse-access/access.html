@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DFI Labs — Pulse Access</title>
+  <meta name="robots" content="noindex,nofollow" />
+  <style>
+    :root {
+      --bg:#0f172a; --card:#111827; --text:#e5e7eb; --muted:#94a3b8; --accent:#6366f1; --border:#1f2937; --ok:#10b981; --err:#ef4444;
+    }
+    html,body { height:100%; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:var(--text); background:linear-gradient(180deg,#0b1222,#0f172a 30%, #0b1222); display:flex; align-items:center; justify-content:center; }
+    .wrap { width:min(560px, 92vw); background:rgba(17,24,39,.75); border:1px solid var(--border); border-radius:16px; padding:24px; backdrop-filter: blur(8px); box-shadow:0 24px 40px rgba(2,8,23,.35); }
+    h1 { margin:0 0 6px 0; font-size:22px; }
+    p.sub { margin:0 0 20px 0; color:var(--muted); }
+    label { display:block; font-size:13px; color:#cbd5e1; margin:12px 0 6px; }
+    input[type=email], input[type=text] { width:100%; padding:12px 12px; border-radius:10px; border:1px solid #334155; background:#0b1222; color:#e5e7eb; outline:none; }
+    input[type=email]::placeholder, input[type=text]::placeholder { color:#64748b; }
+    .row { display:flex; gap:12px; }
+    .row > div { flex:1; }
+    .consent { display:flex; gap:10px; align-items:flex-start; color:#cbd5e1; font-size:13px; margin-top:12px; }
+    .btn { margin-top:16px; background:linear-gradient(135deg,#6366f1,#8b5cf6); border:0; color:white; padding:12px 16px; border-radius:999px; cursor:pointer; box-shadow:0 10px 20px rgba(99,102,241,.35); font-weight:600; }
+    .btn[disabled] { opacity:.6; cursor:not-allowed; }
+    .note { color:var(--muted); font-size:12px; margin-top:8px; }
+    .ok { color:var(--ok); }
+    .err { color:var(--err); }
+    .hidden { display:none; }
+    .copybox { margin-top:14px; display:none; }
+    .copybox input { width:100%; padding:10px; border-radius:8px; border:1px solid #334155; background:#0b1222; color:#e5e7eb; }
+  </style>
+  <script>
+    // Optional backend; configurable via window var or config.json; fallback to client-side link copy
+    // Support both /pulse/access/* and /access/* paths
+    const BASE_PREFIX = location.pathname.startsWith('/pulse/') ? '/pulse' : (location.pathname.includes('/modules/pulse-access/') ? '/modules/pulse-access' : '');
+    const BASE_URL = location.origin + `${BASE_PREFIX}/access/verify.html`;
+    let ACCESS_API_URL = (typeof window !== 'undefined' && window.PULSE_MAILER_URL) ? window.PULSE_MAILER_URL : '';
+
+    (async function loadConfig(){
+      try {
+        if (!ACCESS_API_URL) {
+          const res = await fetch(`${BASE_PREFIX}/access/config.json?cb=${Date.now()}`, { cache: 'no-store' });
+          if (res.ok) {
+            const cfg = await res.json();
+            if (cfg && cfg.ACCESS_API_URL) ACCESS_API_URL = cfg.ACCESS_API_URL;
+          }
+        }
+      } catch(_){}
+    })();
+
+    async function submitForm(e){
+      e.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const name = document.getElementById('name').value.trim();
+      const entity = document.getElementById('entity').value.trim();
+      const consent = document.getElementById('consent').checked;
+      const status = document.getElementById('status');
+      status.textContent = '';
+      if (!email || !name || !entity || !consent){ status.textContent = 'Please fill all fields and accept the consent.'; status.className='err'; return; }
+      document.getElementById('btn').disabled = true;
+
+      const next = new URLSearchParams(location.search).get('next') || '/signal-dashboard/';
+      try {
+        if (ACCESS_API_URL){
+          const res = await fetch(ACCESS_API_URL, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ email, name, entity, next }) });
+          if (!res.ok) throw new Error('Request failed');
+          let data = {};
+          try { data = await res.json(); } catch(_){ data = {}; }
+          if (data && data.ok === false && data.link) {
+            const box = document.getElementById('copybox');
+            document.getElementById('link').value = data.link; box.style.display='block';
+            status.textContent = 'Copy the link and share it with the invitee (sandbox mode).'; status.className='ok';
+          } else {
+            status.textContent = 'Check your inbox for your magic link.'; status.className='ok';
+          }
+        } else {
+          // Client-side fallback: generate a copyable link
+          const token = [...crypto.getRandomValues(new Uint8Array(16))].map(b=>b.toString(16).padStart(2,'0')).join('');
+          const link = `${BASE_URL}?t=${encodeURIComponent(token)}&next=${encodeURIComponent(next)}&email=${encodeURIComponent(email)}&name=${encodeURIComponent(name)}&entity=${encodeURIComponent(entity)}`;
+          const box = document.getElementById('copybox');
+          document.getElementById('link').value = link; box.style.display='block';
+          status.textContent = 'Copy the link and share it with the invitee (sandbox mode).'; status.className='ok';
+        }
+      } catch(err){ status.textContent = 'Could not send link. Try again.'; status.className='err'; }
+      document.getElementById('btn').disabled = false;
+    }
+  </script>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Request Access</h1>
+    <p class="sub">Private preview of the DFI Labs Pulse dashboard.</p>
+    <form onsubmit="submitForm(event)">
+      <label for="email">Work Email</label>
+      <input id="email" type="email" placeholder="name@company.com" required />
+      <div class="row">
+        <div>
+          <label for="name">Full Name</label>
+          <input id="name" type="text" placeholder="Jane Doe" required />
+        </div>
+        <div>
+          <label for="entity">Entity</label>
+          <input id="entity" type="text" placeholder="Firm / Fund" required />
+        </div>
+      </div>
+      <div class="consent">
+        <input id="consent" type="checkbox" />
+        <label for="consent">I am requesting access on my own initiative. Information is not an offer or solicitation. I confirm I am an eligible professional/institutional investor.</label>
+      </div>
+      <button id="btn" class="btn" type="submit">Send Magic Link</button>
+      <div id="status" class="note"></div>
+      <div id="copybox" class="copybox">
+        <input id="link" readonly />
+        <div class="note">Copy link above and share (temporary sandbox mode).</div>
+      </div>
+    </form>
+  </div>
+</body>
+</html>
+
+
+
