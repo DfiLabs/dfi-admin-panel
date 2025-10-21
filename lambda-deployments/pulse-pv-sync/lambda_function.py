@@ -7,6 +7,7 @@ Env:
   BUCKET = dfi-signal-dashboard
   ADMIN_KEY = signal-dashboard/data/portfolio_value_log.jsonl
   PULSE_KEY = descartes-ml/signal-dashboard/data/portfolio_value_log.jsonl
+  PRE_EXEC_KEY = signal-dashboard/data/pre_execution.json
 """
 from __future__ import annotations
 import os, json
@@ -18,6 +19,7 @@ s3 = boto3.client('s3')
 BUCKET = os.environ.get('BUCKET', 'dfi-signal-dashboard')
 ADMIN_KEY = os.environ.get('ADMIN_KEY', 'signal-dashboard/data/portfolio_value_log.jsonl')
 PULSE_KEY = os.environ.get('PULSE_KEY', 'descartes-ml/signal-dashboard/data/portfolio_value_log.jsonl')
+PRE_EXEC_KEY = os.environ.get('PRE_EXEC_KEY', 'signal-dashboard/data/pre_execution.json')
 
 def _dt(s: str) -> datetime:
     if s.endswith('Z'):
@@ -47,6 +49,14 @@ def read_jsonl(bucket: str, key: str) -> list[dict]:
             continue
     return out
 
+def read_json(bucket: str, key: str) -> dict:
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        text = obj['Body'].read().decode('utf-8', 'ignore')
+        return json.loads(text)
+    except Exception:
+        return {}
+
 def write_jsonl(bucket: str, key: str, rows: list[dict]) -> None:
     body = '\n'.join(json.dumps({
         'timestamp': _iso(_dt(r['timestamp'])),
@@ -54,7 +64,7 @@ def write_jsonl(bucket: str, key: str, rows: list[dict]) -> None:
     }, separators=(',', ':')) for r in rows) + '\n'
     s3.put_object(Bucket=bucket, Key=key, Body=body.encode('utf-8'), ContentType='application/json', CacheControl='no-store, max-age=0')
 
-def merge_pulse_with_admin(pulse: list[dict], admin: list[dict]) -> list[dict]:
+def merge_pulse_with_admin(pulse: list[dict], admin: list[dict], pv_pre: float | None = None) -> list[dict]:
     today = datetime.now(timezone.utc).date()
     # Keep Pulse strictly before today
     kept: list[dict] = []
@@ -79,15 +89,19 @@ def merge_pulse_with_admin(pulse: list[dict], admin: list[dict]) -> list[dict]:
         return sorted(kept, key=lambda r: r['timestamp'])
 
     # Rebase admin intraday to Pulse opening PV (yesterday EOD)
-    # Find yesterday EOD from kept, else last available in pulse
+    # Preferred base is Admin pre_execution.pv_pre captured at 00:30Z strictly before execution
     yday = today - timedelta(days=1)
-    pulse_before = [p for p in pulse if _dt(p['timestamp']).date() <= yday]
-    if pulse_before:
-        pulse_open = float(sorted(pulse_before, key=lambda r: _dt(r['timestamp']))[-1].get('portfolio_value', 1_000_000.0))
-    elif kept:
-        pulse_open = float(sorted(kept, key=lambda r: r['timestamp'])[-1]['portfolio_value'])
+    if pv_pre and pv_pre > 0:
+        pulse_open = float(pv_pre)
     else:
-        pulse_open = 1_000_000.0
+        # Fallback to last Pulse PV strictly before today (<= yday)
+        pulse_before = [p for p in pulse if _dt(p['timestamp']).date() <= yday]
+        if pulse_before:
+            pulse_open = float(sorted(pulse_before, key=lambda r: _dt(r['timestamp']))[-1].get('portfolio_value', 1_000_000.0))
+        elif kept:
+            pulse_open = float(sorted(kept, key=lambda r: r['timestamp'])[-1]['portfolio_value'])
+        else:
+            pulse_open = 1_000_000.0
 
     admin_base = float(admin_today[0]['portfolio_value']) or 1.0
     rebased: list[dict] = []
@@ -109,7 +123,13 @@ def merge_pulse_with_admin(pulse: list[dict], admin: list[dict]) -> list[dict]:
 def lambda_handler(event, _):
     pulse = read_jsonl(BUCKET, PULSE_KEY)
     admin = read_jsonl(BUCKET, ADMIN_KEY)
-    merged = merge_pulse_with_admin(pulse, admin)
+    pre_exec = read_json(BUCKET, PRE_EXEC_KEY)
+    pv_pre = None
+    try:
+        pv_pre = float(pre_exec.get('pv_pre')) if pre_exec else None
+    except Exception:
+        pv_pre = None
+    merged = merge_pulse_with_admin(pulse, admin, pv_pre)
     write_jsonl(BUCKET, PULSE_KEY, merged)
     return {
         'statusCode': 200,

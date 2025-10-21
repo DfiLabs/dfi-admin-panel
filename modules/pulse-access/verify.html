@@ -14,7 +14,14 @@
       const email = p.get('email')||'';
       const name = p.get('name')||'';
       const entity = p.get('entity')||'';
-      const next = p.get('next') || '/signal-dashboard/';
+      const rawNext = p.get('next') || '/signal-dashboard/';
+      // Normalize next so S3/CF resolves to a file path, not a bare directory key
+      const next = (function(n){
+        if (!n || n === '/') return '/signal-dashboard/index.html';
+        if (n === '/signal-dashboard') return '/signal-dashboard/index.html';
+        if (n.endsWith('/')) return n + 'index.html';
+        return n;
+      })(rawNext);
       if (t) {
         // Persist basic audit trail client-side; backend can augment when SES leaves sandbox
         try {
@@ -26,6 +33,11 @@
         const payload = btoa(JSON.stringify({ email, name, entity, iat: Date.now() }));
         const expires = new Date(Date.now() + 14*24*60*60*1000).toUTCString();
         document.cookie = `pulse_session=${payload}; Path=/; Secure; SameSite=Lax; Expires=${expires}`;
+        // Fire-and-forget redemption log if configured
+        try {
+          const url = (window.PULSE_ACCESS_LOG_URL || '');
+          if (url) fetch(url, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ t, email, name, entity, action:'redeem' }) });
+        } catch(_){ }
       }
       location.replace(next);
     })();

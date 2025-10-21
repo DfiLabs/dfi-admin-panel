@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DFI Labs — Pulse Access Admin</title>
+  <meta name="robots" content="noindex,nofollow" />
+  <style>
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e5e7eb}
+    .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
+    h1{font-size:22px;margin:0 0 16px}
+
+    .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+    .btn{background:#334155;color:#e5e7eb;border:0;border-radius:8px;padding:8px 10px;cursor:pointer}
+    .seg{display:inline-flex;background:#0b1222;border:1px solid #1f2937;border-radius:10px;overflow:hidden}
+    .seg button{background:transparent;color:#cbd5e1;border:0;padding:8px 12px;cursor:pointer}
+    .seg button.active{background:#1f2937;color:#fff}
+    input{background:#0b1222;border:1px solid #334155;color:#e5e7eb;border-radius:8px;padding:8px}
+    label.small{font-size:12px;color:#94a3b8;display:flex;gap:6px;align-items:center}
+
+    .cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:12px 0 16px}
+    .card{background:#0b1222;border:1px solid #1f2937;border-radius:12px;padding:12px}
+    .card h3{margin:0 0 6px;font-size:12px;color:#94a3b8}
+    .card p{margin:0;font-size:18px}
+
+    table{width:100%;border-collapse:separate;border-spacing:0;background:#0b1222;border:1px solid #1f2937;border-radius:12px;overflow:hidden}
+    th,td{padding:10px 12px;border-bottom:1px solid #1f2937;font-size:13px;vertical-align:top}
+    th{color:#93c5fd;text-align:left;background:#0f172a;position:sticky;top:0}
+    tr:last-child td{border-bottom:0}
+    tbody tr:nth-child(odd){background:rgba(255,255,255,0.02)}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#cbd5e1}
+    .muted{color:#94a3b8}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Pulse Access — Admin</h1>
+    <div class="toolbar">
+      <div class="seg" role="tablist">
+        <button id="tabUsers" class="active" role="tab" aria-selected="true">Users</button>
+        <button id="tabRequests" role="tab" aria-selected="false">Requests</button>
+      </div>
+      <button class="btn" id="refresh">Refresh</button>
+      <a class="btn" id="csv" href="#" download>Download CSV</a>
+      <div class="seg" role="tablist" aria-label="Range">
+        <button id="r14" class="active" data-days="14">14d</button>
+        <button id="r90" data-days="90">90d</button>
+        <button id="rAll" data-days="all">All</button>
+      </div>
+      <input id="q" placeholder="Filter email/name/entity" />
+      <label class="small" id="guardCtl" style="display:none"><input type="checkbox" id="includeGuard"> Include guard rows</label>
+    </div>
+
+    <div class="cards">
+      <div class="card"><h3>Total issued (14d)</h3><p id="k_issued">–</p></div>
+      <div class="card"><h3>Total redeemed (14d)</h3><p id="k_redeemed">–</p></div>
+      <div class="card"><h3>Active sessions</h3><p id="k_active">–</p></div>
+      <div class="card"><h3>Last event</h3><p id="k_last">–</p></div>
+    </div>
+
+    <table>
+      <thead id="thead"></thead>
+      <tbody id="rows"><tr><td class="muted" style="padding:14px">Loading…</td></tr></tbody>
+    </table>
+    <div class="muted" id="meta" style="margin-top:8px"></div>
+  </div>
+
+  <script>
+    const BASE_PREFIX = location.pathname.startsWith('/pulse/') ? '/pulse' : '';
+    const state = { view:'users', items:[], filtered:[], includeGuard:false, days:14 };
+
+    async function getConfig(){
+      try{ const r = await fetch(`${BASE_PREFIX}/access/config.json?cb=${Date.now()}`, {cache:'no-store'}); if(!r.ok) return {}; return await r.json(); }catch(_){ return {}; }
+    }
+
+    function formatNice(iso){
+      if(!iso) return '';
+      const d = new Date(iso);
+      if(isNaN(d)) return `<span class="mono">${iso}</span>`;
+      const now = new Date();
+      const sod = x => { const y = new Date(x); y.setHours(0,0,0,0); return y; };
+      const diff = Math.round((sod(now) - sod(d)) / 86400000);
+      let prefix;
+      if(diff === 0) prefix = 'Today';
+      else if(diff === 1) prefix = 'Yesterday';
+      else if(diff > -7 && diff < 7) prefix = d.toLocaleDateString(undefined, { weekday:'short' });
+      else prefix = d.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'2-digit' });
+      const time = d.toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' });
+      return `<span class="mono" title="${iso}">${prefix} ${time}</span>`;
+    }
+
+    function aggregateUsers(items){
+      const byEmail = new Map();
+      for(const it of items){
+        if(it.status === 'guard') continue;
+        const key = it.email || 'unknown';
+        const prev = byEmail.get(key) || { email:key, name:'', entity:'', issuedCount:0, redeemedCount:0, firstIssued:null, lastIssued:null, lastSeen:null };
+        prev.name = (it.name && it.name.length>1) ? it.name : prev.name;
+        prev.entity = (it.entity && it.entity.length>0) ? it.entity : prev.entity;
+        prev.issuedCount += 1;
+        if(it.redeemedAt) prev.redeemedCount += 1;
+        prev.firstIssued = prev.firstIssued ? (it.issuedAt && it.issuedAt < prev.firstIssued ? it.issuedAt : prev.firstIssued) : it.issuedAt;
+        prev.lastIssued = prev.lastIssued ? (it.issuedAt && it.issuedAt > prev.lastIssued ? it.issuedAt : prev.lastIssued) : it.issuedAt;
+        if(it.lastSeenAt) prev.lastSeen = prev.lastSeen ? (it.lastSeenAt > prev.lastSeen ? it.lastSeenAt : prev.lastSeen) : it.lastSeenAt;
+        byEmail.set(key, prev);
+      }
+      return Array.from(byEmail.values()).sort((a,b)=> (b.lastSeen||'') .localeCompare(a.lastSeen||'') || (b.lastIssued||'') .localeCompare(a.lastIssued||''));
+    }
+
+    function renderUsers(){
+      const q = document.getElementById('q').value.toLowerCase();
+      const rows = aggregateUsers(state.items).filter(r=> [r.email,r.name,r.entity].some(v=> (v||'').toLowerCase().includes(q)) );
+      document.getElementById('thead').innerHTML = `<tr>
+        <th>Email</th><th>Name</th><th>Entity</th><th>Issued</th><th>Redeemed</th><th>First Issued</th><th>Last Issued</th><th>Last Seen</th>
+      </tr>`;
+      const tbody = document.getElementById('rows');
+      if(!rows.length){ tbody.innerHTML = `<tr><td class="muted" style="padding:14px">No users</td></tr>`; document.getElementById('meta').textContent=''; return; }
+      tbody.innerHTML = rows.map(r=>`<tr>
+        <td>${r.email}</td>
+        <td>${r.name||''}</td>
+        <td>${r.entity||''}</td>
+        <td>${r.issuedCount}</td>
+        <td>${r.redeemedCount}</td>
+        <td>${formatNice(r.firstIssued)}</td>
+        <td>${formatNice(r.lastIssued)}</td>
+        <td>${formatNice(r.lastSeen)}</td>
+      </tr>`).join('');
+      document.getElementById('meta').textContent = `${rows.length} users`;
+    }
+
+    function renderRequests(){
+      const q = document.getElementById('q').value.toLowerCase();
+      document.getElementById('thead').innerHTML = `<tr>
+        <th>Email</th><th>Name</th><th>Entity</th><th>Status</th><th>Issued</th><th>Expires</th><th>Redeemed</th><th>Last Seen</th>
+      </tr>`;
+      const includeGuard = document.getElementById('includeGuard').checked;
+      let rows = state.items.slice().sort((a,b)=> (b.issuedAt||'').localeCompare(a.issuedAt||''));
+      if(!includeGuard) rows = rows.filter(r=> r.status !== 'guard');
+      rows = rows.filter(r=> [r.email,r.name,r.entity].some(v=> (v||'').toLowerCase().includes(q)) );
+      const tbody = document.getElementById('rows');
+      if(!rows.length){ tbody.innerHTML = `<tr><td class="muted" style="padding:14px">No requests</td></tr>`; document.getElementById('meta').textContent=''; return; }
+      tbody.innerHTML = rows.map(r=>`<tr>
+        <td>${r.email||''}</td>
+        <td>${r.name||''}</td>
+        <td>${r.entity||''}</td>
+        <td>${r.status||''}</td>
+        <td>${formatNice(r.issuedAt)}</td>
+        <td>${formatNice(r.expiresAt)}</td>
+        <td>${formatNice(r.redeemedAt)}</td>
+        <td>${formatNice(r.lastSeenAt)}</td>
+      </tr>`).join('');
+      document.getElementById('meta').textContent = `${rows.length} requests`;
+    }
+
+    function renderSummary(items){
+      // Detect aggregator rows (users scope) vs token rows
+      const isUsers = Array.isArray(items) && items.length && (items[0].issuedCount !== undefined || items[0].email);
+      if(isUsers){
+        const issued = items.reduce((s,r)=> s + (r.issuedCount||0), 0);
+        const redeemed = items.reduce((s,r)=> s + (r.redeemedCount||0), 0);
+        const active = items.filter(r=> r.lastSeenAt).length;
+        const lastIso = items.reduce((m,r)=> {
+          const c = (r.lastSeenAt||r.lastIssued||r.firstIssued||'');
+          return c && (!m || c>m) ? c : m;
+        }, '');
+        document.getElementById('k_issued').textContent = issued;
+        document.getElementById('k_redeemed').textContent = redeemed;
+        document.getElementById('k_active').textContent = active;
+        document.getElementById('k_last').innerHTML = lastIso ? formatNice(lastIso) : '–';
+        return;
+      }
+      const issued = items.filter(r=> r.status !== 'guard').length;
+      const redeemed = items.filter(r=> r.redeemedAt).length;
+      const active = aggregateUsers(items).filter(r=> r.lastSeen && !r.redeemedCount).length; // heuristic
+      const last = items.reduce((m,r)=> r.issuedAt && r.issuedAt>m ? r.issuedAt : m, '');
+      document.getElementById('k_issued').textContent = issued;
+      document.getElementById('k_redeemed').textContent = redeemed;
+      document.getElementById('k_active').textContent = active;
+      document.getElementById('k_last').innerHTML = last ? formatNice(last) : '–';
+    }
+
+    async function load(){
+      const cfg = await getConfig();
+      const url = (cfg && cfg.ACCESS_REPORT_URL) || '';
+      if(!url){ state.items=[]; renderUsers(); renderSummary([]); return; }
+      const qs = [];
+      if(state.view === 'users'){
+        qs.push('scope=users');
+      } else {
+        qs.push(`days=${state.days}`);
+      }
+      const q = url + (url.includes('?') ? '&' : '?') + qs.join('&');
+      const r = await fetch(q, {cache:'no-store'});
+      const data = await r.json().catch(()=>({items:[]}));
+      state.items = (data.items||[]);
+      renderSummary(state.items);
+      if(state.view==='users') renderUsers(); else renderRequests();
+      document.getElementById('csv').href = q + '&format=csv';
+    }
+
+    // UI wiring
+    document.getElementById('refresh').onclick = load;
+    document.getElementById('q').oninput = ()=> state.view==='users' ? renderUsers() : renderRequests();
+    document.getElementById('tabUsers').onclick = ()=>{ state.view='users'; document.getElementById('tabUsers').classList.add('active'); document.getElementById('tabRequests').classList.remove('active'); document.getElementById('guardCtl').style.display='none'; renderUsers(); };
+    document.getElementById('tabRequests').onclick = ()=>{ state.view='requests'; document.getElementById('tabRequests').classList.add('active'); document.getElementById('tabUsers').classList.remove('active'); document.getElementById('guardCtl').style.display='flex'; renderRequests(); };
+    document.getElementById('includeGuard').onchange = ()=> renderRequests();
+
+    // Range selector
+    function setRange(days){ state.days = days; for(const id of ['r14','r90','rAll']) document.getElementById(id).classList.remove('active');
+      if(days===14) document.getElementById('r14').classList.add('active');
+      else if(days===90) document.getElementById('r90').classList.add('active');
+      else document.getElementById('rAll').classList.add('active');
+      load(); }
+    document.getElementById('r14').onclick = ()=> setRange(14);
+    document.getElementById('r90').onclick = ()=> setRange(90);
+    document.getElementById('rAll').onclick = ()=> setRange('all');
+
+    load();
+  </script>
+</body>
+</html>

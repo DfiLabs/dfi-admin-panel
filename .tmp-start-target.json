@@ -1,0 +1,1 @@
+{"Arn":"arn:aws:scheduler:::aws-sdk:ec2:startInstances","RoleArn":"arn:aws:iam::004150946930:role/SchedulerStopEC2Role","Input":"{\"InstanceIds\":[\"i-06213785c9ea50045\"]}"}

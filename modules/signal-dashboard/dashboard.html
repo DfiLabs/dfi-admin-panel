@@ -52,9 +52,9 @@
                 <div style="margin-top:8px">
                     <label for="strategy-select" style="font-weight:600;margin-right:8px;color:#6b7280">Strategy</label>
                     <select id="strategy-select" style="padding:10px 14px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;color:#111827">
-                        <option value="/signal-dashboard/data/">Descartes Diversified</option>
-                        <option value="/signal-dashboard/descartes-beta/data/">Descartes Beta</option>
-                        <option value="/signal-dashboard/descartes-ridge-unravel/data/">Descartes Reg</option>
+                        <option value="/signal-dashboard/data/combined_descartes_unravel/">Descartes Diversified</option>
+                        <option value="/signal-dashboard/data/ml_qube/">Descartes Beta</option>
+                        <option value="/signal-dashboard/data/ridge_unravel/">Descartes Reg</option>
                     </select>
                 </div>
             </div>
@@ -351,7 +351,10 @@
     </main>
     <script>
         // Core state - single source of truth
-        let DATA_PREFIX = localStorage.getItem('DATA_PREFIX') || '/signal-dashboard/data/';
+        let DATA_PREFIX = '/signal-dashboard/data/combined_descartes_unravel/';
+        // Price/PV prefixes remain at env root while CSV/positions are per-strategy
+        let PRICES_PREFIX = '/signal-dashboard/data/';
+        let PV_PREFIX = '/signal-dashboard/data/';
         const IS_DEMO = (typeof location !== 'undefined') && (location.hostname.includes('demo.dfi-labs.com') || location.hostname.includes('pulse.dfi-labs.com'));
         const IS_PULSE = (typeof location !== 'undefined') && location.hostname.includes('pulse.dfi-labs.com');
         const DIAG = (typeof location !== 'undefined') && new URLSearchParams(location.search).has('diag');
@@ -372,12 +375,36 @@
             // Force demo to Descartes Diversified only
             DATA_PREFIX = '/signal-dashboard/data/';
             try { localStorage.setItem('DATA_PREFIX', DATA_PREFIX); } catch (e) {}
-        }
-        if (IS_PULSE) {
-            // Pulse served via CloudFront default routes: use demo path which is fed pulse data
-            DATA_PREFIX = '/signal-dashboard/data/';
+        } else if (IS_PULSE) {
+            // Pulse should read from its own dataset (descartes-ml prefix)
+            DATA_PREFIX = '/descartes-ml/signal-dashboard/data/';
+            PRICES_PREFIX = '/descartes-ml/signal-dashboard/data/';
+            PV_PREFIX = '/descartes-ml/signal-dashboard/data/';
             try { localStorage.setItem('DATA_PREFIX', DATA_PREFIX); } catch (e) {}
+        } else {
+            // Admin: allow switching between whitelisted strategy paths; default to Diversified
+            const allowedPrefixes = [
+                '/signal-dashboard/data/combined_descartes_unravel/',
+                '/signal-dashboard/data/ml_qube/',
+                '/signal-dashboard/data/ridge_unravel/'
+            ];
+            try {
+                const saved = localStorage.getItem('DATA_PREFIX');
+                if (saved && allowedPrefixes.includes(saved)) {
+                    DATA_PREFIX = saved;
+                } else {
+                    DATA_PREFIX = allowedPrefixes[0];
+                    localStorage.setItem('DATA_PREFIX', DATA_PREFIX);
+                }
+            } catch (e) { /* keep default */ }
         }
+        // Reflect selection in the UI once DOM is ready
+        window.addEventListener('DOMContentLoaded', function(){
+            try {
+                var sel = document.getElementById('strategy-select');
+                if (sel) sel.value = DATA_PREFIX;
+            } catch (e) {}
+        });
         let currentSnapshot = {
             timestamp: null,
             portfolioValue: 1000000, // Start with $1M
@@ -418,7 +445,7 @@
         // Load current positions from latest.json (single source of truth)
         async function loadDailyCSV() {
             try {
-                // Primary source: latest.json (authoritative for both strategies)
+                // Primary source: latest.json (authoritative per strategy)
                 const latestRes = await fetch(`${DATA_PREFIX}latest.json?cb=${Date.now()}`, { cache: 'no-store' });
                 if (!latestRes.ok) {
                     console.log('⚠️ latest.json not found, falling back to pre_execution.json');
@@ -440,7 +467,7 @@
                     }
                 }
                 
-                // Fallback: pre_execution.json if latest.json missing
+                // Fallback: pre_execution.json if latest.json missing (per-strategy only)
                 if (!csvFilename) {
                     try {
                         const preResponse = await fetch(`${DATA_PREFIX}pre_execution.json?cb=${Date.now()}`, { cache: 'no-store' });
@@ -478,24 +505,35 @@
                 
                 const positions = [];
                 for (let i = 1; i < portfolioLines.length; i++) {
-                    if (portfolioLines[i].trim()) {
+                    if (!portfolioLines[i].trim()) continue;
                         const values = portfolioLines[i].split(',');
-                        const position = {};
+                    const raw = {};
                         portfolioHeaders.forEach((header, index) => {
-                            position[header.trim()] = values[index] ? values[index].trim() : '';
-                        });
-                        positions.push(position);
+                        raw[header.trim()] = values[index] ? values[index].trim() : '';
+                    });
+                    const pos = { ...raw };
+                    pos.ticker = (raw.ticker || raw.product || raw.ric || raw.internal_code || '').replace('_','');
+                    const weightVal = parseFloat(raw.target_weight || '');
+                    if (!isNaN(weightVal)) {
+                        const side = weightVal === 0 ? 0 : (weightVal > 0 ? 1 : -1);
+                        const notional = Math.abs(weightVal) * referenceCapital;
+                        if (!raw.target_contracts || raw.target_contracts === '0') pos.target_contracts = String(side);
+                        if (!raw.target_notional || raw.target_notional === '0') pos.target_notional = String(notional);
                     }
+                    if (!pos.ref_price && raw.ref_price) pos.ref_price = raw.ref_price;
+                    positions.push(pos);
                 }
                 
                 console.log(`Loaded ${positions.length} positions from ${csvFilename}`);
                 
                 // Set baseline prices (current market prices at CSV execution)
                 const baselinePrices = await fetchBaselinePrices(positions);
+                const marks = await fetchCurrentPrices(positions);
                 
                 // Update current snapshot
                 currentSnapshot.positions = positions;
                 currentSnapshot.baselinePrices = baselinePrices;
+                currentSnapshot.currentPrices = marks;
                 console.log('🔍 DEBUG: Loaded positions count:', positions.length);
                 console.log('🔍 DEBUG: First 3 positions:', positions.slice(0, 3));
                 // Clear any previous-day carryover to avoid large jumps on refresh
@@ -516,7 +554,8 @@
                 const response = await fetch(`${DATA_PREFIX}daily_baseline.json?cb=${Date.now()}`, { cache: 'no-store' });
                 if (!response.ok) return {};
                 const baseline = await response.json();
-                const prices = baseline.prices || {};
+                // Prefer ref_prices (executed entry prices); fallback to prices field if older schema
+                const prices = (baseline && (baseline.ref_prices || baseline.prices)) || {};
                 if (DIAG) {
                     try {
                         const probe = ['BTCUSDT','ETHUSDT','BNBUSDT'];
@@ -527,6 +566,16 @@
                 return prices;
             } catch (error) {
                 console.error('Error loading baseline prices:', error);
+                // Fallback: build a ref_price map from CSV if available
+                try {
+                    const map = {};
+                    (positions || []).forEach(p => {
+                        const t = (p.ticker || '').replace('_','');
+                        const r = parseFloat(p.ref_price || '');
+                        if (t && !isNaN(r) && r > 0) map[t] = r;
+                    });
+                    if (Object.keys(map).length) return map;
+                } catch(_){}
                 return {};
             }
         }
@@ -578,7 +627,7 @@
             try {
                 console.log('🔍 Loading current prices from S3 latest_prices.json...');
                 const cacheBuster = new Date().getTime();
-                const response = await fetch(`${DATA_PREFIX}latest_prices.json?cb=${cacheBuster}`, {
+                const response = await fetch(`${PRICES_PREFIX}latest_prices.json?cb=${cacheBuster}`, {
                     cache: 'no-store'
                 });
                 if (!response.ok) return {};
@@ -607,7 +656,7 @@
             try {
                 // Add cache-busting parameter to force fresh data
                 const cacheBuster = new Date().getTime();
-                const response = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${cacheBuster}`, {
+                const response = await fetch(`${PV_PREFIX}portfolio_value_log.jsonl?cb=${cacheBuster}`, {
                     cache: 'no-store'
                 });
                 if (response.ok) {
@@ -618,12 +667,13 @@
                         
                         console.log('📊 Latest S3 entry:', latestEntry);
                         
-                        // Use S3 data as authoritative source
+                        // Use S3 data for PV and S3-derived fields; do NOT set dailyPnL here
                         currentSnapshot.timestamp = new Date(latestEntry.timestamp);
                         currentSnapshot.portfolioValue = latestEntry.portfolio_value;
-                        currentSnapshot.dailyPnL = latestEntry.daily_pnl;
                         currentSnapshot.s3DailyPnL = latestEntry.daily_pnl;
                         currentSnapshot.s3TotalPnL = latestEntry.total_pnl;
+                        // Keep strategy-level dailyPnL undefined until we compute it locally
+                        currentSnapshot.dailyPnL = undefined;
                         
                         // Use audit data for Long/Short breakdown
                         if (latestEntry.audit) {
@@ -643,23 +693,14 @@
                             }
                         }
 
-                        // Only render early if S3 daily_pnl exists; otherwise wait for local calc
-                        if (typeof currentSnapshot.dailyPnL === 'number' && isFinite(currentSnapshot.dailyPnL)) {
-                            updateUI();
-                            return;
-                        }
+                        // Do not early-return; we want to compute strategy-level dailyPnL next
                     }
                 }
             } catch (error) {
                 console.log('⚠️ Could not load S3 data, falling back to calculation');
             }
             
-            // If we have S3 data including daily P&L, we can skip local calc; else compute
-            if (currentSnapshot.longPnL !== undefined && currentSnapshot.shortPnL !== undefined && typeof currentSnapshot.dailyPnL === 'number') {
-                console.log('📊 S3 data loaded successfully, skipping calculations');
-                updateUI();
-                return;
-            }
+            // Always attempt local per-strategy calculation when positions exist
             
             console.log('🔍 DEBUG: currentSnapshot.positions.length =', currentSnapshot.positions.length);
             console.log('🔍 DEBUG: currentSnapshot.baselinePrices keys =', Object.keys(currentSnapshot.baselinePrices || {}));
@@ -865,7 +906,7 @@
         async function updateRiskCards(scope){
             try {
                 // Strategy daily from PV log (strategy-aware via DATA_PREFIX)
-                const res = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache: 'no-store' });
+                const res = await fetch(`${PV_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache: 'no-store' });
                 if (!res.ok){
                     ['risk-corr','risk-hit','risk-mdd'].forEach(id=>{ const el = document.getElementById(id); if (el) el.textContent = 'N/A'; });
                     return;
@@ -938,10 +979,12 @@
 
             // Use S3 daily_pnl when present; otherwise use one-shot local calc (no carryover)
             let cardDaily;
-            if (snapshot.s3DailyPnL !== null && snapshot.s3DailyPnL !== undefined && isFinite(snapshot.s3DailyPnL)) {
-                cardDaily = snapshot.s3DailyPnL;
-            } else if (typeof snapshot.dailyPnL === 'number' && isFinite(snapshot.dailyPnL)) {
+            // Prefer strategy-level calculation (baseline ref_prices vs current marks)
+            if (typeof snapshot.dailyPnL === 'number' && isFinite(snapshot.dailyPnL)) {
                 cardDaily = snapshot.dailyPnL;
+            } else if (snapshot.s3DailyPnL !== null && snapshot.s3DailyPnL !== undefined && isFinite(snapshot.s3DailyPnL)) {
+                // Fallback to S3 env-level daily_pnl
+                cardDaily = snapshot.s3DailyPnL;
             } else {
                 cardDaily = undefined;
             }
@@ -1128,11 +1171,16 @@
             
             positions.forEach(position => {
                 const symbol = position.ticker || position.ric || position.internal_code || 'N/A';
-                const binanceSymbol = symbol.replace('_', '');
-                // Removed entry-based metrics by request
-                const entryPrice = snapshot.baselinePrices[binanceSymbol];
-                const baselinePrice = snapshot.baselinePrices[binanceSymbol];
-                const currentPrice = snapshot.currentPrices[binanceSymbol];
+                const binanceSymbol = symbol.replace('_', '').toUpperCase();
+                const alias = (s)=>({
+                    'SHIBUSDT':'1000SHIBUSDT', 'PEPEUSDT':'1000PEPEUSDT', 'XECUSDT':'1000XECUSDT', 'SATSUSDT':'1000SATSUSDT', 'RATSUSDT':'1000RATSUSDT', 'FLOKIUSDT':'1000FLOKIUSDT', 'LUNCUSDT':'1000LUNCUSDT', 'XUSDT':'1000XUSDT'
+                }[s] || s);
+                const reverseAlias = (s)=>({
+                    '1000SHIBUSDT':'SHIBUSDT', '1000PEPEUSDT':'PEPEUSDT', '1000XECUSDT':'XECUSDT', '1000SATSUSDT':'SATSUSDT', '1000RATSUSDT':'RATSUSDT', '1000FLOKIUSDT':'FLOKIUSDT', '1000LUNCUSDT':'LUNCUSDT', '1000XUSDT':'XUSDT'
+                }[s] || s);
+                const entryPrice = (snapshot.baselinePrices[binanceSymbol] ?? snapshot.baselinePrices[reverseAlias(binanceSymbol)] ?? null);
+                const baselinePrice = entryPrice;
+                const currentPrice = (snapshot.currentPrices[binanceSymbol] ?? snapshot.currentPrices[alias(binanceSymbol)] ?? null);
                 const notional = parseFloat(position.target_notional || 0);
                 const side = parseFloat(position.target_contracts) > 0 ? 'LONG' : 'SHORT';
                 const weight = (Math.abs(notional) / refCap) * 100;
@@ -1206,7 +1254,8 @@
         async function loadHistoricalPVData(timeframe) {
             try {
                 const cacheBuster = new Date().getTime();
-                const response = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${cacheBuster}`, {
+                // PV/EOD history remains at env root; DATA_PREFIX is per-strategy
+                const response = await fetch(`${PV_PREFIX}portfolio_value_log.jsonl?cb=${cacheBuster}`, {
                     cache: 'no-store'
                 });
                 if (!response.ok) {
@@ -1452,7 +1501,7 @@
             ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
             
             // Compute SI bounds so we can show the full series
-            let siMin = null, siMax = null, siYMin = null, siYMax = null;
+            let siMin = null, siMax = null, siYMin = null, siYMax = null, siTimeUnit = 'month', siSpanDays = null;
             if (timeframe === 'SI' && data && data.length > 0) {
                 const xs = data.map(d => new Date(d.timestamp).getTime());
                 const ys = data.map(d => (d.portfolio_value ?? d.portfolioValue));
@@ -1460,6 +1509,11 @@
                 siMax = new Date(Math.max.apply(null, xs));
                 siYMin = Math.min.apply(null, ys);
                 siYMax = Math.max.apply(null, ys);
+                siSpanDays = Math.max(1, Math.round((siMax.getTime() - siMin.getTime()) / (24*60*60*1000)));
+                // Adaptive unit: show days for short SI ranges, months for medium, years for long
+                if (siSpanDays <= 45) siTimeUnit = 'day';
+                else if (siSpanDays > 365 * 3) siTimeUnit = 'year';
+                else siTimeUnit = 'month';
                 console.log(`[SI] applying bounds: ${siMin.toISOString()} → ${siMax.toISOString()} | Y ${siYMin} → ${siYMax}`);
             }
 
@@ -1483,7 +1537,8 @@
                         label: 'Portfolio Value',
                             data: data.map(log => ({
                                 x: new Date(log.timestamp),
-                                y: log.portfolio_value || log.portfolioValue
+                                y: log.portfolio_value || log.portfolioValue,
+                                raw_ts: log.timestamp // preserve original ISO timestamp for robust UTC tooltip formatting
                             })),
                             borderColor: borderGradient,
                             backgroundColor: gradient,
@@ -1549,14 +1604,19 @@
                                 caretPadding: 8,
                                 callbacks: {
                                     title: function(context) {
-                                        const date = new Date(context[0].label);
-                                        return date.toLocaleString('en-US', {
-                                            weekday: 'short',
+                                        const raw = (context && context[0] && context[0].raw) || {};
+                                        const iso = typeof raw.raw_ts === 'string' ? raw.raw_ts : null;
+                                        const fallbackTs = (context && context[0] && (context[0].parsed && context[0].parsed.x)) || null;
+                                        const date = iso ? new Date(iso) : (fallbackTs ? new Date(fallbackTs) : new Date());
+                                        const formatted = new Intl.DateTimeFormat('en-US', {
                                             month: 'short',
                                             day: 'numeric',
                                             hour: '2-digit',
-                                            minute: '2-digit'
-                                        });
+                                            minute: '2-digit',
+                                            timeZone: 'UTC'
+                                        }).format(date);
+                                        // Safety: strip any stray weekday prefix that might appear due to cached code paths
+                                        return String(formatted).replace(/^[A-Za-z]{3},\s*/,'');
                                     },
                                     label: function(context) {
                                         return `Portfolio: ${formatCurrency(context.parsed.y)}`;
@@ -1588,6 +1648,7 @@
                                                 };
                                             case 'SI':
                                                 return {
+                                                    day: 'MMM dd',
                                                     month: 'MMM yyyy',
                                                     year: 'yyyy'
                                                 };
@@ -1604,7 +1665,7 @@
                                             case '1D': return 'hour';
                                             case '7D': return 'day';
                                             case '1M': return 'day';
-                                            case 'SI': return 'month';
+                                            case 'SI': return siTimeUnit;
                                             default: return 'hour';
                                         }
                                     })()
@@ -1630,6 +1691,10 @@
                                             case '1D': return 12;
                                             case '7D': return 7;
                                             case '1M': return 15;
+                                            case 'SI':
+                                                if (siTimeUnit === 'day') return Math.min(30, Math.max(6, Math.floor(siSpanDays / 3)));
+                                                if (siTimeUnit === 'month') return 12;
+                                                return 10;
                                             default: return 12;
                                         }
                                     })()
@@ -2148,108 +2213,48 @@
                     try {
                         const fmt = (document.getElementById('dw-format')?.value || 'csv');
                         const series = (document.getElementById('dw-series')?.value || 'daily_returns');
-                        // fetch full PV log
-                        const res = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache: 'no-store' });
+                        const dayKey = (ts) => { const d=new Date(ts); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString().slice(0,10); };
+                        const normalizeDate = (s) => { if (!s) return ''; if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s; const d = new Date(s); return isNaN(d.getTime()) ? '' : d.toISOString().slice(0,10); };
+                        // fetch full PV log and compute last UTC day
+                        const res = await fetch(`${PV_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache: 'no-store' });
                         if (!res.ok) throw new Error('No PV log');
                         const text = (await res.text()).trim();
                         if (!text) throw new Error('Empty PV log');
                         const rows = text.split('\n').map(l=>{ try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+                        const allDays = [...new Set(rows.map(r => dayKey(r.timestamp)))].sort();
+                        const lastDay = allDays.at(-1);
+                        let startStr = normalizeDate(dwStart.value);
+                        let endStr = normalizeDate(dwEnd.value);
+                        const activePreset = document.querySelector('.dw-presets button.active')?.dataset?.preset || null;
+                        if (activePreset === 'all') { startStr=''; endStr = lastDay; }
+                        else if (['7','30','90'].includes(activePreset||'')) {
+                            const n = Number(activePreset);
+                            const end = new Date(lastDay + 'T00:00:00Z');
+                            const start = new Date(end.getTime() - (n - 1) * 24*60*60*1000);
+                            startStr = start.toISOString().slice(0,10);
+                            endStr = lastDay;
+                        } else { if (!endStr || endStr > lastDay) endStr = lastDay; }
+                        try { if (dwStart) dwStart.value = startStr || ''; if (dwEnd) dwEnd.value = endStr || ''; } catch(_) {}
                         // filter by date range (UTC days)
-                        const startStr = dwStart.value;
-                        const endStr = dwEnd.value;
-                        const filtered = rows.filter(r => {
-                            const d = new Date(r.timestamp);
-                            const day = d.toISOString().slice(0,10);
-                            if (startStr && day < startStr) return false;
-                            if (endStr && day > endStr) return false;
-                            return true;
-                        });
+                        const filtered = rows.filter(r => { const k=dayKey(r.timestamp); if (startStr && k<startStr) return false; if (endStr && k>endStr) return false; return true; });
                         // group by UTC day
                         const map = new Map();
-                        filtered.forEach(r => {
-                            const k = new Date(r.timestamp).toISOString().slice(0,10);
-                            const arr = map.get(k) || []; arr.push(r); map.set(k, arr);
-                        });
+                        filtered.forEach(r => { const k = dayKey(r.timestamp); const arr = map.get(k) || []; arr.push(r); map.set(k, arr); });
                         const days = Array.from(map.keys()).sort();
                         let out = [];
                         if (series === 'daily_pv') {
-                            // EOD PV per day (last point of each UTC day)
-                            days.forEach(k => {
-                                const pts = map.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp));
-                                const pvClose = pts[pts.length-1]?.portfolio_value;
-                                if (typeof pvClose === 'number') out.push({ Date:k, PV: pvClose });
-                            });
+                            days.forEach(k => { const pts = map.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp)); const last = pts[pts.length-1]; const pvClose = (last?.portfolio_value ?? last?.portfolioValue); if (typeof pvClose === 'number') out.push({ Date:k, PV: pvClose }); });
                         } else if (series === 'daily_vs_btc') {
-                            // Strategy daily returns and BTC daily returns side-by-side
-                            // Build strategy daily returns first (close-to-close)
-                            const strat = [];
-                            let prevClose = null;
-                            days.forEach(k => {
-                                const pts = map.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp));
-                                const pvClose = pts[pts.length-1]?.portfolio_value;
-                                if (typeof pvClose === 'number') {
-                                    if (typeof prevClose === 'number' && prevClose > 0) {
-                                        const r = (pvClose / prevClose - 1) * 100;
-                                        strat.push({ Date:k, Strat:r.toFixed(2) });
-                                    } else {
-                                        strat.push({ Date:k, Strat:(0).toFixed(2) });
-                                    }
-                                    prevClose = pvClose;
-                                }
-                            });
-                            // Load BTC benchmark returns
-                            const btcCsv = await fetch('/signal-dashboard/benchmarks/btc_daily_returns.csv?cb=' + Date.now(), { cache:'no-store' }).then(r=>r.ok?r.text():Promise.resolve(''));
-                            const btcMap = new Map();
-                            if (btcCsv) {
-                                const bl = btcCsv.trim().split('\n');
-                                const header = bl.shift();
-                                bl.forEach(line=>{ const [d,p] = line.split(','); if (d) btcMap.set(d, p); });
-                            }
-                            // Join on Date
-                            out = strat.map(r=> ({ Date:r.Date, Performance:r.Strat, BTC_Perf:(btcMap.get(r.Date) ?? '') }));
+                            const strat = []; let prevClose = null;
+                            days.forEach(k => { const pts = map.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp)); const last = pts[pts.length-1]; const pvClose = (last?.portfolio_value ?? last?.portfolioValue); if (typeof pvClose === 'number') { if (typeof prevClose === 'number' && prevClose > 0) strat.push({ Date:k, Strat:(((pvClose/prevClose)-1)*100).toFixed(2) }); else strat.push({ Date:k, Strat:(0).toFixed(2) }); prevClose = pvClose; } });
+                            const btcCsv = await fetch('/signal-dashboard/benchmarks/btc_daily_returns.csv?cb=' + Date.now(), { cache:'no-store' }).then(r=>r.ok?r.text():'');
+                            const btcMap = new Map(); if (btcCsv) { const bl = btcCsv.trim().split('\n'); const h = (bl[0]||'').toLowerCase(); if (h.includes('date')) bl.shift(); bl.forEach(line=>{ const [d,p] = line.split(','); if (d) btcMap.set(d.trim(), String(p??'').trim()); }); }
+                            out = strat.map(r => ({ Date:r.Date, Performance:r.Strat, BTC_Performance:(btcMap.get(r.Date) ?? '') }));
                         } else {
-                            // Daily % return = close(today)/close(yesterday) - 1 (uses EOD closes)
-                            let prevClose = null;
-                            days.forEach(k => {
-                                const pts = map.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp));
-                                const pvClose = pts[pts.length-1]?.portfolio_value;
-                                if (typeof pvClose === 'number') {
-                                    if (typeof prevClose === 'number' && prevClose > 0) {
-                                        const r = (pvClose / prevClose - 1) * 100;
-                                        out.push({ Date:k, Performance: r.toFixed(2) });
-                                    } else {
-                                        // First day: report 0.00 to keep CSV shape
-                                        out.push({ Date:k, Performance: (0).toFixed(2) });
-                                    }
-                                    prevClose = pvClose;
-                                }
-                            });
+                            let prevClose = null; days.forEach(k => { const pts = map.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp)); const last = pts[pts.length-1]; const pvClose = (last?.portfolio_value ?? last?.portfolioValue); if (typeof pvClose === 'number') { if (typeof prevClose === 'number' && prevClose > 0) out.push({ Date:k, Performance:(((pvClose/prevClose)-1)*100).toFixed(2) }); else out.push({ Date:k, Performance:(0).toFixed(2) }); prevClose = pvClose; } });
                         }
-                        if (fmt === 'json') {
-                            const blob = new Blob([JSON.stringify(out,null,2)], {type:'application/json'});
-                            const url = URL.createObjectURL(blob);
-                            const name = (series==='daily_pv' ? 'daily_pv' : 'daily_returns');
-                            const a = Object.assign(document.createElement('a'), { href:url, download:`${name}_${(dwStart.value||'ALL')}_to_${(dwEnd.value||'TODAY')}.json` });
-                            document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-                        } else {
-                            let header, lines;
-                            if (series === 'daily_pv') {
-                                header = 'Date,PV';
-                                lines = out.map(r => `${r.Date},${r.PV}`);
-                            } else if (series === 'daily_vs_btc') {
-                                header = 'Date,Performance,BTC_Performance';
-                                lines = out.map(r => `${r.Date},${r.Performance},${r.BTC_Perf}`);
-                            } else {
-                                header = 'Date,Performance';
-                                lines = out.map(r => `${r.Date},${r.Performance}`);
-                            }
-                            const csv = [header].concat(lines).join('\n');
-                            const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
-                            const url = URL.createObjectURL(blob);
-                            const name = (series==='daily_pv' ? 'daily_pv' : (series==='daily_vs_btc'?'daily_vs_btc':'daily_returns'));
-                            const a = Object.assign(document.createElement('a'), { href:url, download:`${name}_${(dwStart.value||'ALL')}_to_${(dwEnd.value||'TODAY')}.csv` });
-                            document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-                        }
+                        if (fmt === 'json') { const blob = new Blob([JSON.stringify(out,null,2)], {type:'application/json'}); const url = URL.createObjectURL(blob); const name = (series==='daily_pv' ? 'daily_pv' : (series==='daily_vs_btc'?'daily_vs_btc':'daily_returns')); const a = Object.assign(document.createElement('a'), { href:url, download:`${name}_${(startStr||'ALL')}_to_${(endStr||'TODAY')}.json` }); document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
+                        else { let header, lines; if (series === 'daily_pv') { header='Date,PV'; lines = out.map(r => `${r.Date},${r.PV}`); } else if (series==='daily_vs_btc') { header='Date,Performance,BTC_Performance'; lines = out.map(r => `${r.Date},${r.Performance},${r.BTC_Performance}`); } else { header='Date,Performance'; lines = out.map(r => `${r.Date},${r.Performance}`); } const csv=[header].concat(lines).join('\n'); const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}); const url=URL.createObjectURL(blob); const name=(series==='daily_pv'?'daily_pv':(series==='daily_vs_btc'?'daily_vs_btc':'daily_returns')); const a=Object.assign(document.createElement('a'),{href:url,download:`${name}_${(startStr||'ALL')}_to_${(endStr||'TODAY')}.csv`}); document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
                     } catch (e) {
                         console.warn('Download failed', e);
                     }
@@ -2358,19 +2363,19 @@
         function getSourceDescriptor(explicitSource) {
             try {
                 if (explicitSource) {
-                    if (explicitSource.toLowerCase().includes('ridge')) return 'ridge • ridge_unravel/qube/signal';
-                    if (explicitSource.toLowerCase().includes('beta')) return 'beta • ml_qube/qube/signal';
-                    if (explicitSource.toLowerCase().includes('unravel')) return 'unravel • combined_descartes_unravel/qube/signal';
+            if (explicitSource.toLowerCase().includes('ridge')) return 'ridge • ridge_unravel/monitor/signal';
+                    if (explicitSource.toLowerCase().includes('beta')) return 'beta • ml_qube/monitor/signal';
+                    if (explicitSource.toLowerCase().includes('unravel')) return 'unravel • combined_descartes_unravel/monitor/signal';
                 }
                 if (!DATA_PREFIX) return '';
                 if (DATA_PREFIX.indexOf('descartes-beta') !== -1) {
-                    return 'beta • ml_qube/qube/signal';
+                    return 'beta • ml_qube/monitor/signal';
                 }
                 if (DATA_PREFIX.indexOf('descartes-ridge-unravel') !== -1) {
-                    return 'ridge • ridge_unravel/qube/signal';
+                    return 'ridge • ridge_unravel/monitor/signal';
                 }
                 // Default to Unravel mapping
-                return 'unravel • combined_descartes_unravel/qube/signal';
+                return 'unravel • combined_descartes_unravel/monitor/signal';
             } catch (e) {
                 return '';
             }
@@ -2447,7 +2452,7 @@
             console.log('🔄 Updating chart from S3 data...');
             try {
                 const cacheBuster = new Date().getTime();
-                const response = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${cacheBuster}`, {
+                const response = await fetch(`${PV_PREFIX}portfolio_value_log.jsonl?cb=${cacheBuster}`, {
                     cache: 'no-store'
                 });
                 if (response.ok) {
@@ -2486,8 +2491,8 @@
                     
                     console.log(`📊 Chart updated with ${s3Data.length} data points from S3`);
 
-                    // Refresh S3-derived metric cards (avg daily return, vol, sharpe)
-                    updateS3MetricsCards();
+                    // Refresh metrics from S3 (avg daily return, vol, sharpe)
+                    initializeMetrics();
                 } else {
                     console.log('⚠️ No S3 data available yet, keeping current chart');
                     // Don't update chart if S3 data is not available, keep current data
@@ -2610,14 +2615,48 @@
             section.style.display = 'block';
         }
 
-        // Cache SI daily returns for metrics to avoid refetching
-        let METRICS_DAILY_ALL = null; // numbers in decimal (not %)
-
+        // Compute SI daily returns by merging CSV with any newer EOD closes from PV log (read-only)
         async function ensureMetricsDaily() {
-            if (Array.isArray(METRICS_DAILY_ALL)) return METRICS_DAILY_ALL;
-            const pvAll = await loadHistoricalPVData('SI');
-            METRICS_DAILY_ALL = computeDailyReturnsFromPV(pvAll);
-            return METRICS_DAILY_ALL;
+            const dayKey = (ts) => { const d=new Date(ts); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString().slice(0,10); };
+            // Load CSV (base history)
+            let csvRows = [];
+            try {
+                const csv = await fetch(`${DATA_PREFIX}eod_pv.csv?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
+                if (csv) {
+                    let lines = csv.trim().split('\n').filter(Boolean);
+                    const header = (lines[0]||'').toLowerCase();
+                    if (header.includes('date') && header.includes('pv')) lines = lines.slice(1);
+                    csvRows = lines.map(l=>{ const [d,p]=l.split(','); return { d: String(d).trim(), pv: Number(p) }; }).filter(r=>r.d && Number.isFinite(r.pv));
+                }
+            } catch(_) {}
+            // Load PV log and derive EOD closes per UTC day
+            let logCloses = [];
+            try {
+                const jl = await fetch(`${PV_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
+                if (jl) {
+                    const rows = jl.trim().split('\n').map(l=>{ try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+                    const by = new Map();
+                    rows.forEach(r=>{ const k=dayKey(r.timestamp); const arr = by.get(k) || []; arr.push(r); by.set(k, arr); });
+                    const days = [...by.keys()].sort();
+                    logCloses = days.map(k=>{ const pts = by.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp)); const last = pts[pts.length-1]; const pv = (last?.portfolio_value ?? last?.portfolioValue); return (typeof pv==='number') ? { d:k, pv } : null; }).filter(Boolean);
+                }
+            } catch(_) {}
+            // Merge: CSV base + any newer days from PV log
+            let closes = csvRows.slice();
+            if (!closes.length) {
+                closes = logCloses.slice();
+            } else if (logCloses.length) {
+                const lastCsv = closes[closes.length-1].d;
+                const toAppend = logCloses.filter(r=> r.d > lastCsv);
+                if (toAppend.length) closes = closes.concat(toAppend);
+            }
+            // Compute daily returns
+            const daily = [];
+            for (let i=1;i<closes.length;i++) {
+                const prev = closes[i-1].pv, cur = closes[i].pv;
+                if (Number.isFinite(prev) && prev>0 && Number.isFinite(cur)) daily.push((cur/prev) - 1);
+            }
+            return daily;
         }
 
         function sliceByScope(arr, scope) {
@@ -2678,8 +2717,7 @@
         }
 
         async function initializeMetrics() {
-            await ensureMetricsDaily();
-            // Defaults: avg 90D, sharpe 90D, vol SI
+            // Defaults: avg 90D, sharpe 90D, vol SI (all recomputed from S3 on call)
             await updateAvgCard('90D');
             await updateSharpeCard('90D');
             await updateVolCardSI();

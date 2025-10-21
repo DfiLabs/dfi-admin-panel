@@ -19,20 +19,12 @@ try:
 except Exception:
     pass
 
-# Import email notifier with safe fallback (define temporary printer until log() exists)
-_early_print = lambda m: print(m)
-try:
-    from email_notifier import EmailNotifier  # type: ignore
-    _early_print("✅ EmailNotifier imported successfully from email_notifier.py")
-except Exception as e:
-    _early_print(f"❌ EmailNotifier import failed: {e}")
-    class EmailNotifier:  # type: ignore
-        def send_once_per_day(self, subject: str, html: str) -> None:
-            _early_print(f"Email notifier unavailable. Would have sent: {subject}")
+_early_print = lambda m: None
 
 
 # Allow overriding by environment variables to support multiple strategies
-CSV_DIRECTORY = os.getenv('CSV_DIRECTORY', '/home/leo/Desktop/dfilabs-machine-v2/dfilabs-machine-v2/signal/combined_descartes_unravel/qube/signal/')
+# Default updated to the new monitor location; can be overridden via env.
+CSV_DIRECTORY = os.getenv('CSV_DIRECTORY', '/home/leo/Desktop/dfilabs-machine-v2/dfilabs-machine-v2/signal/combined_descartes_unravel/monitor/signal/')
 TARGET_SUFFIX = '2355.csv'
 LOG_FILE = '/home/ubuntu/csv-detection.log'
 S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME', 'dfi-signal-dashboard')
@@ -42,6 +34,25 @@ S3_DASHBOARD_KEY = 'signal-dashboard/dashboard.html'
 
 # detector-only switches
 PV_WRITER_ENABLED = os.getenv("PV_WRITER_ENABLED", "0") == "1"  # default OFF
+
+# Environment selection for S3 prefixes: ADMIN or PULSE (defaults to PULSE)
+ENV = os.getenv('ENV', 'ADMIN').upper()
+DRY_RUN = os.getenv('DRY_RUN', '0') == '1'
+
+# Strategy -> local folder mapping (Ubuntu server)
+STRATEGY_DIRS = {
+    'combined_descartes_unravel': '/home/leo/Desktop/dfilabs-machine-v2/dfilabs-machine-v2/signal/combined_descartes_unravel/monitor/signal/',
+    'ridge_unravel': '/home/leo/Desktop/dfilabs-machine-v2/dfilabs-machine-v2/signal/ridge_unravel/monitor/signal/',
+    'ml_qube': '/home/leo/Desktop/dfilabs-machine-v2/dfilabs-machine-v2/signal/ml_qube/monitor/signal/'
+}
+
+def s3_prefix_for(strategy: str) -> str:
+    base = 'descartes-ml/signal-dashboard/data' if ENV == 'PULSE' else 'signal-dashboard/data'
+    return f"{base}/{strategy}/"
+
+def s3_prefix_for_env(env: str, strategy: str) -> str:
+    base = 'descartes-ml/signal-dashboard/data' if env.upper() == 'PULSE' else 'signal-dashboard/data'
+    return f"{base}/{strategy}/"
 
 
 def log(msg: str) -> None:
@@ -62,14 +73,14 @@ def sudo_stat_epoch(full_path: str) -> int:
     return int(res.stdout.strip())
 
 
-def get_latest_2355() -> str | None:
+def get_latest_2355(dir_path: str) -> str | None:
     try:
-        files = sudo_listdir_sorted(CSV_DIRECTORY)
+        files = sudo_listdir_sorted(dir_path)
         latest_name = None
         latest_ts = None
         for name in files:
             if name.endswith(TARGET_SUFFIX):
-                fp = os.path.join(CSV_DIRECTORY, name)
+                fp = os.path.join(dir_path, name)
                 ts = sudo_stat_epoch(fp)
                 if latest_name is None or ts > latest_ts:
                     latest_name = name
@@ -80,8 +91,9 @@ def get_latest_2355() -> str | None:
         return None
 
 
-def copy_with_sudo_to_tmp(src_name: str) -> str | None:
-    src = os.path.join(CSV_DIRECTORY, src_name)
+def copy_with_sudo_to_tmp(src_name: str, strategy: str) -> str | None:
+    base_dir = STRATEGY_DIRS.get(strategy, CSV_DIRECTORY)
+    src = os.path.join(base_dir, src_name)
     dst = os.path.join('/tmp', src_name)
     try:
         subprocess.run(['sudo', 'cp', src, dst], check=True)
@@ -92,64 +104,41 @@ def copy_with_sudo_to_tmp(src_name: str) -> str | None:
         return None
 
 
-def upload_csv_to_s3(local_path: str, filename: str) -> bool:
+def upload_csv_to_s3(local_path: str, filename: str, strategy: str) -> bool:
     s3 = boto3.client('s3')
     try:
-        s3.upload_file(local_path, S3_BUCKET_NAME, S3_KEY_PREFIX + filename, ExtraArgs={'ContentType': 'text/csv', 'CacheControl': 'no-cache'})
-        log(f"Uploaded to s3://{S3_BUCKET_NAME}/{S3_KEY_PREFIX}{filename}")
+        key = s3_prefix_for(strategy) + filename
+        s3.upload_file(local_path, S3_BUCKET_NAME, key, ExtraArgs={'ContentType': 'text/csv', 'CacheControl': 'no-cache'})
+        log(f"Uploaded to s3://{S3_BUCKET_NAME}/{key}")
         return True
     except Exception as e:
         log(f"S3 upload failed: {e}")
         return False
 
+def upload_csv_to_both_envs(local_path: str, filename: str, strategy: str) -> bool:
+    """Upload the CSV to BOTH Admin and Pulse per-strategy prefixes."""
+    if DRY_RUN:
+        log(f"DRY RUN: would upload {filename} to both envs for {strategy}")
+        return True
+    s3 = boto3.client('s3')
+    ok_all = True
+    for env in ('ADMIN', 'PULSE'):
+        try:
+            key = s3_prefix_for_env(env, strategy) + filename
+            s3.upload_file(local_path, S3_BUCKET_NAME, key, ExtraArgs={'ContentType': 'text/csv', 'CacheControl': 'no-cache'})
+            log(f"Uploaded ({env}) to s3://{S3_BUCKET_NAME}/{key}")
+        except Exception as e:
+            ok_all = False
+            log(f"S3 upload failed for {env}: {e}")
+    return ok_all
+
 
 def update_dashboard_html_on_s3(new_csv_filename: str) -> bool:
-    """Lightweight: stamp CSV name/time into dashboard HTML without embedding CSV."""
-    s3 = boto3.client('s3')
-    try:
-        resp = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_DASHBOARD_KEY)
-        html = resp['Body'].read().decode('utf-8')
-
-        now_iso = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
-
-        import re
-        changed = False
-
-        # Replace existing <span id="csv-name">…</span>
-        if re.search(r'id="csv-name">', html):
-            html = re.sub(r'id="csv-name">[^<]*<', f'id="csv-name">{new_csv_filename}<', html)
-            changed = True
-
-        # Replace existing <span id="csv-timestamp">…</span>
-        if re.search(r'id="csv-timestamp">', html):
-            html = re.sub(r'id="csv-timestamp">[^<]*<', f'id="csv-timestamp">(loaded: {now_iso})<', html)
-            changed = True
-
-        # If markers are missing, inject a tiny banner before </body>
-        if not changed:
-            banner = (
-                f'<div style="font:14px/1.4 system-ui,sans-serif;background:#f6f7fb;border:1px solid #e2e6f0;padding:8px 12px;border-radius:8px;display:inline-block;margin:8px 0;">📊 '
-                f'<span id="csv-name">{new_csv_filename}</span> '
-                f'<span id="csv-timestamp">(loaded: {now_iso})</span>'
-                f'</div>'
-            )
-            html = re.sub(r'</body>', banner + '\n</body>', html, flags=re.IGNORECASE)
-
-        s3.put_object(
-            Bucket=S3_BUCKET_NAME,
-            Key=S3_DASHBOARD_KEY,
-            Body=html.encode('utf-8'),
-            ContentType='text/html',
-            CacheControl='no-cache'
-        )
-        log("Dashboard stamped with CSV name/time")
-        return True
-    except Exception as e:
-        log(f"Dashboard update failed: {e}")
-        return False
+    # Legacy dashboard stamping removed
+    return True
 
 
-def write_latest_json(filename: str) -> bool:
+def write_latest_json(filename: str, strategy: str, sha256: str | None = None) -> bool:
     """Write a small latest.json with the newest CSV filename for the dashboard to consume."""
     s3 = boto3.client('s3')
     import json
@@ -158,37 +147,77 @@ def write_latest_json(filename: str) -> bool:
         'latest_csv': filename,
         'updated_utc': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     }
+    if sha256:
+        payload['sha256'] = sha256
     try:
-        s3.put_object(
-            Bucket=S3_BUCKET_NAME,
-            Key=S3_KEY_PREFIX + 'latest.json',
-            Body=json.dumps(payload).encode('utf-8'),
-            ContentType='application/json',
-            CacheControl='no-cache'
-        )
+        s3.put_object(Bucket=S3_BUCKET_NAME, Key=s3_prefix_for(strategy) + 'latest.json', Body=json.dumps(payload).encode('utf-8'), ContentType='application/json', CacheControl='no-cache')
         log(f"Wrote latest.json with {filename}")
         return True
     except Exception as e:
         log(f"Failed to write latest.json: {e}")
         return False
 
+def write_latest_json_both(filename: str, strategy: str, sha256: str | None = None) -> bool:
+    """Write latest.json to BOTH Admin and Pulse per-strategy prefixes."""
+    if DRY_RUN:
+        log(f"DRY RUN: would write latest.json for {strategy} filename={filename}")
+        return True
+    s3 = boto3.client('s3')
+    import json
+    payload = {
+        'filename': filename,
+        'latest_csv': filename,
+        'updated_utc': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    }
+    if sha256:
+        payload['sha256'] = sha256
+    ok_all = True
+    for env in ('ADMIN', 'PULSE'):
+        try:
+            s3.put_object(Bucket=S3_BUCKET_NAME, Key=s3_prefix_for_env(env, strategy) + 'latest.json', Body=json.dumps(payload).encode('utf-8'), ContentType='application/json', CacheControl='no-cache')
+            log(f"Wrote latest.json ({env}) with {filename}")
+        except Exception as e:
+            ok_all = False
+            log(f"Failed to write latest.json for {env}: {e}")
+    return ok_all
 
-def read_current_latest_json() -> str | None:
+
+def read_current_latest_json(strategy: str) -> str | None:
     """Return the filename currently referenced by latest.json on S3 (or None)."""
     s3 = boto3.client('s3')
     import json
     try:
-        obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest.json')
+        obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=s3_prefix_for(strategy) + 'latest.json')
         data = json.loads(obj['Body'].read().decode('utf-8'))
         return data.get('filename')
     except Exception:
         return None
 
 
-def append_log_row(action: str, csv_filename: str, portfolio_value: float, positions_count: int, total_notional: float, pre_value_for_day: float | None) -> bool:
-    """Append one row to portfolio_daily_log.csv on S3. daily_pnl is computed only for post_execution using pre_value_for_day."""
+def read_latest_meta(strategy: str) -> dict | None:
     s3 = boto3.client('s3')
-    log_file_key = S3_KEY_PREFIX + 'portfolio_daily_log.csv'
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=s3_prefix_for(strategy) + 'latest.json')
+        return json.loads(obj['Body'].read().decode('utf-8'))
+    except Exception:
+        return None
+
+def read_latest_meta_env(env: str, strategy: str) -> dict | None:
+    s3 = boto3.client('s3')
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=s3_prefix_for_env(env, strategy) + 'latest.json')
+        return json.loads(obj['Body'].read().decode('utf-8'))
+    except Exception:
+        return None
+
+
+def append_log_row(action: str, csv_filename: str, portfolio_value: float, positions_count: int, total_notional: float, pre_value_for_day: float | None, strategy: str) -> bool:
+    """Append one row to portfolio_daily_log.csv on S3. daily_pnl is computed only for post_execution using pre_value_for_day."""
+    if DRY_RUN:
+        log(f"DRY RUN: would append {action} row for {csv_filename} portfolio={portfolio_value:,.2f}")
+        return True
+    s3 = boto3.client('s3')
+    log_file_key = s3_prefix_for(strategy) + 'portfolio_daily_log.csv'
     initial_capital = 1_000_000.0
     now = datetime.datetime.utcnow()
     timestamp = now.isoformat()
@@ -238,12 +267,12 @@ def append_log_row(action: str, csv_filename: str, portfolio_value: float, posit
     return True
 
 
-def calculate_real_portfolio_value(csv_filename: str) -> dict:
+def calculate_real_portfolio_value(csv_filename: str, strategy: str) -> dict:
     """Calculate real portfolio value from CSV data and current market prices."""
     try:
         # Get the CSV content from S3
         s3 = boto3.client('s3')
-        csv_key = S3_KEY_PREFIX + csv_filename
+        csv_key = s3_prefix_for(strategy) + csv_filename
         response = s3.get_object(Bucket=S3_BUCKET_NAME, Key=csv_key)
         csv_content = response['Body'].read().decode('utf-8')
         
@@ -279,7 +308,8 @@ def calculate_real_portfolio_value(csv_filename: str) -> dict:
         # Fetch current prices from S3 latest_prices.json (single source of truth)
         current_prices = {}
         try:
-            latest_obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest_prices.json')
+            prices_prefix = ('descartes-ml/signal-dashboard/data/' if ENV == 'PULSE' else 'signal-dashboard/data/')
+            latest_obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=prices_prefix + 'latest_prices.json')
             latest_data = json.loads(latest_obj['Body'].read().decode('utf-8'))
             prices_map = latest_data.get('prices', {}) or {}
             for symbol in symbols:
@@ -433,10 +463,13 @@ def create_or_update_portfolio_log(csv_filename: str) -> bool:
         return False
 
 
-def write_daily_baseline_json(csv_filename: str, portfolio_value: float, prices: dict) -> bool:
+def write_daily_baseline_json(csv_filename: str, portfolio_value: float, prices: dict, strategy: str) -> bool:
     """Write the post-execution daily baseline snapshot for UI daily P&L reset."""
     log(f"🎯 write_daily_baseline_json called with: {csv_filename}, portfolio_value={portfolio_value}, prices_keys={len(prices) if prices else 0}")
     try:
+        if DRY_RUN:
+            log('DRY RUN: would write daily_baseline.json')
+            return True
         s3 = boto3.client('s3')
         import json
         payload = {
@@ -445,13 +478,7 @@ def write_daily_baseline_json(csv_filename: str, portfolio_value: float, prices:
             'portfolio_value': float(portfolio_value),
             'prices': prices or {}
         }
-        s3.put_object(
-            Bucket=S3_BUCKET_NAME,
-            Key=S3_KEY_PREFIX + 'daily_baseline.json',
-            Body=json.dumps(payload).encode('utf-8'),
-            ContentType='application/json',
-            CacheControl='no-store'
-        )
+        s3.put_object(Bucket=S3_BUCKET_NAME, Key=s3_prefix_for(strategy) + 'daily_baseline.json', Body=json.dumps(payload).encode('utf-8'), ContentType='application/json', CacheControl='no-store')
         log('Baseline snapshot written (daily_baseline.json)')
         return True
     except Exception as e:
@@ -459,7 +486,7 @@ def write_daily_baseline_json(csv_filename: str, portfolio_value: float, prices:
         return False
 
 
-def write_pre_execution_pending(csv_filename: str, csv_sha256: str) -> bool:
+def write_pre_execution_pending(csv_filename: str, csv_sha256: str, strategy: str) -> bool:
     """Write pre_execution_pending.json at CSV detection time (no execution).
 
     Detection-only artifact. The finalized pre_execution.json is written by
@@ -467,11 +494,15 @@ def write_pre_execution_pending(csv_filename: str, csv_sha256: str) -> bool:
     pre_execution.json.
     """
     try:
+        if DRY_RUN:
+            log('DRY RUN: would write pre_execution_pending.json')
+            return True
         s3 = boto3.client('s3')
         # Load latest marks to snapshot at detection time
         prices = {}
         try:
-            latest_obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest_prices.json')
+            prices_prefix = ('descartes-ml/signal-dashboard/data/' if ENV == 'PULSE' else 'signal-dashboard/data/')
+            latest_obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=prices_prefix + 'latest_prices.json')
             latest = json.loads(latest_obj['Body'].read().decode('utf-8'))
             prices = latest.get('prices', {}) or {}
         except Exception as e:
@@ -486,13 +517,7 @@ def write_pre_execution_pending(csv_filename: str, csv_sha256: str) -> bool:
             'pv_pre': None,
             'prices_at_t0': prices
         }
-        s3.put_object(
-            Bucket=S3_BUCKET_NAME,
-            Key=S3_KEY_PREFIX + 'pre_execution_pending.json',
-            Body=json.dumps(payload).encode('utf-8'),
-            ContentType='application/json',
-            CacheControl='no-store'
-        )
+        s3.put_object(Bucket=S3_BUCKET_NAME, Key=s3_prefix_for(strategy) + 'pre_execution_pending.json', Body=json.dumps(payload).encode('utf-8'), ContentType='application/json', CacheControl='no-store')
         log('pre_execution_pending.json written (detection snapshot)')
         return True
     except Exception as e:
@@ -841,108 +866,108 @@ def continuous_timeseries_writer() -> None:
     def writer_loop():
         while True:
             try:
-                # Get the latest CSV filename
-                latest_csv = read_current_latest_json()
-                if not latest_csv:
-                    time.sleep(60)
-                    continue
-                
-                # Calculate current portfolio metrics using the same logic as the UI
-                portfolio_data = calculate_real_portfolio_value(latest_csv)
-                if not portfolio_data:
-                    time.sleep(60)
-                    continue
-                
-                # Get baseline info
-                s3 = boto3.client('s3')
-                baseline_ready = False
-                baseline_prices = {}
-                try:
-                    baseline_resp = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'daily_baseline.json')
-                    baseline_data = json.loads(baseline_resp['Body'].read().decode('utf-8'))
-                    baseline_prices = baseline_data.get('prices', {})
-                    baseline_ready = True
-                except:
-                    pass
-                
-                # Calculate daily P&L (same logic as UI)
-                daily_pnl = 0
-                is_day1_fallback = False
-                
-                # Get current prices from S3 latest_prices.json
-                current_prices = {}
-                try:
-                    latest_obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'latest_prices.json')
-                    latest_data = json.loads(latest_obj['Body'].read().decode('utf-8'))
-                    prices_map = latest_data.get('prices', {}) or {}
+                # Iterate per strategy and write series separately
+                for strategy in STRATEGY_DIRS.keys():
+                    latest_csv = read_current_latest_json(strategy)
+                    if not latest_csv:
+                        continue
+
+                    # Calculate current portfolio metrics using the same logic as the UI
+                    portfolio_data = calculate_real_portfolio_value(latest_csv, strategy)
+                    if not portfolio_data:
+                        continue
+
+                    # Get baseline info
+                    s3 = boto3.client('s3')
+                    baseline_ready = False
+                    baseline_prices = {}
+                    try:
+                        baseline_resp = s3.get_object(Bucket=S3_BUCKET_NAME, Key=s3_prefix_for(strategy) + 'daily_baseline.json')
+                        baseline_data = json.loads(baseline_resp['Body'].read().decode('utf-8'))
+                        baseline_prices = baseline_data.get('prices', {})
+                        baseline_ready = True
+                    except:
+                        pass
+
+                    # Calculate daily P&L (same logic as UI)
+                    daily_pnl = 0
+                    is_day1_fallback = False
+
+                    # Get current prices from S3 latest_prices.json
+                    current_prices = {}
+                    try:
+                        prices_prefix = ('descartes-ml/signal-dashboard/data/' if ENV == 'PULSE' else 'signal-dashboard/data/')
+                        latest_obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=prices_prefix + 'latest_prices.json')
+                        latest_data = json.loads(latest_obj['Body'].read().decode('utf-8'))
+                        prices_map = latest_data.get('prices', {}) or {}
+                        for pos in portfolio_data.get('positions', []):
+                            symbol = pos.get('ticker', '').replace('_', '')
+                            if symbol in prices_map:
+                                try:
+                                    current_prices[symbol] = float(prices_map[symbol])
+                                except Exception:
+                                    pass
+                    except Exception:
+                        current_prices = {}
+
+                    # Calculate daily P&L using same logic as UI
                     for pos in portfolio_data.get('positions', []):
                         symbol = pos.get('ticker', '').replace('_', '')
-                        if symbol in prices_map:
-                            try:
-                                current_prices[symbol] = float(prices_map[symbol])
-                            except Exception:
-                                pass
-                except Exception:
-                    current_prices = {}
-                
-                # Calculate daily P&L using same logic as UI
-                for pos in portfolio_data.get('positions', []):
-                    symbol = pos.get('ticker', '').replace('_', '')
-                    entry_price = float(pos.get('ref_price', 0))
-                    notional = float(pos.get('target_notional', 0))
-                    contracts = float(pos.get('target_contracts', 0))
-                    side = 'LONG' if contracts > 0 else 'SHORT'
-                    
-                    if symbol in current_prices and entry_price > 0:
-                        current_price = current_prices[symbol]
-                        
-                        if baseline_ready and symbol in baseline_prices:
-                            # Use baseline prices
-                            base_price = baseline_prices[symbol]
-                            pct = (current_price - base_price) / base_price if side == 'LONG' else (base_price - current_price) / base_price
-                            daily_pnl += pct * notional
-                        else:
-                            # Day-1 fallback: entry vs live
-                            pct = (current_price - entry_price) / entry_price if side == 'LONG' else (entry_price - current_price) / entry_price
-                            daily_pnl += pct * notional
-                            is_day1_fallback = True
-                
-                # Get base cumulative (same logic as UI)
-                base_cumulative = 0
-                try:
-                    log_resp = s3.get_object(Bucket=S3_BUCKET_NAME, Key=S3_KEY_PREFIX + 'portfolio_daily_log.csv')
-                    log_content = log_resp['Body'].read().decode('utf-8')
-                    lines = log_content.strip().split('\n')
-                    if len(lines) > 1:
-                        headers = lines[0].split(',')
-                        action_idx = headers.index('action') if 'action' in headers else 5
-                        date_idx = headers.index('date') if 'date' in headers else 1
-                        cumulative_idx = headers.index('cumulative_pnl') if 'cumulative_pnl' in headers else 9
-                        
-                        today_utc = datetime.datetime.utcnow().strftime('%Y-%m-%d')
-                        
-                        # Find last pre_execution from prior day
-                        for i in range(len(lines) - 1, 0, -1):
-                            row = lines[i].split(',')
-                            if len(row) > max(action_idx, date_idx, cumulative_idx):
-                                action = row[action_idx]
-                                row_date = row[date_idx].strip()
-                                if action == 'pre_execution' and row_date and row_date < today_utc:
-                                    base_cumulative = float(row[cumulative_idx]) if cumulative_idx < len(row) else 0
-                                    break
-                except:
-                    pass
-                
-                # Calculate totals
-                total_pnl = base_cumulative + daily_pnl
-                portfolio_value = 1000000.0 + total_pnl
-                
-                # Write time series point
-                append_timeseries_point(latest_csv, portfolio_value, daily_pnl, total_pnl, base_cumulative, is_day1_fallback)
-                
+                        entry_price = float(pos.get('ref_price', 0))
+                        notional = float(pos.get('target_notional', 0))
+                        contracts = float(pos.get('target_contracts', 0))
+                        side = 'LONG' if contracts > 0 else 'SHORT'
+
+                        if symbol in current_prices and entry_price > 0:
+                            current_price = current_prices[symbol]
+
+                            if baseline_ready and symbol in baseline_prices:
+                                # Use baseline prices
+                                base_price = baseline_prices[symbol]
+                                pct = (current_price - base_price) / base_price if side == 'LONG' else (base_price - current_price) / base_price
+                                daily_pnl += pct * notional
+                            else:
+                                # Day-1 fallback: entry vs live
+                                pct = (current_price - entry_price) / entry_price if side == 'LONG' else (entry_price - current_price) / entry_price
+                                daily_pnl += pct * notional
+                                is_day1_fallback = True
+
+                    # Get base cumulative (same logic as UI)
+                    base_cumulative = 0
+                    try:
+                        log_resp = s3.get_object(Bucket=S3_BUCKET_NAME, Key=s3_prefix_for(strategy) + 'portfolio_daily_log.csv')
+                        log_content = log_resp['Body'].read().decode('utf-8')
+                        lines = log_content.strip().split('\n')
+                        if len(lines) > 1:
+                            headers = lines[0].split(',')
+                            action_idx = headers.index('action') if 'action' in headers else 5
+                            date_idx = headers.index('date') if 'date' in headers else 1
+                            cumulative_idx = headers.index('cumulative_pnl') if 'cumulative_pnl' in headers else 9
+
+                            today_utc = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+
+                            # Find last pre_execution from prior day
+                            for i in range(len(lines) - 1, 0, -1):
+                                row = lines[i].split(',')
+                                if len(row) > max(action_idx, date_idx, cumulative_idx):
+                                    action = row[action_idx]
+                                    row_date = row[date_idx].strip()
+                                    if action == 'pre_execution' and row_date and row_date < today_utc:
+                                        base_cumulative = float(row[cumulative_idx]) if cumulative_idx < len(row) else 0
+                                        break
+                    except:
+                        pass
+
+                    # Calculate totals
+                    total_pnl = base_cumulative + daily_pnl
+                    portfolio_value = 1000000.0 + total_pnl
+
+                    # Write time series point
+                    append_timeseries_point(latest_csv, portfolio_value, daily_pnl, total_pnl, base_cumulative, is_day1_fallback)
+
             except Exception as e:
                 log(f'Timeseries writer error: {e}')
-            
+
             time.sleep(60)  # 1 minute cadence
     
     # Start the background thread
@@ -975,9 +1000,10 @@ def main() -> None:
     
     log("🚀 Starting CSV monitoring script...")
     log(f"📝 Monitor log: {log_filename}")
-    notifier = EmailNotifier()
-    last_processed = None
-    last_executed_sha256 = None
+    # Legacy email notifier removed
+    # Per-strategy state
+    last_processed: dict[str, str | None] = {k: None for k in STRATEGY_DIRS.keys()}
+    last_executed_sha256: dict[str, str | None] = {k: None for k in STRATEGY_DIRS.keys()}
 
     log("📧 EmailNotifier initialized")
 
@@ -1002,16 +1028,23 @@ def main() -> None:
         # compute window state at the top of the loop
         now0 = datetime.datetime.utcnow()
         in_window = compute_in_window(now0)
-        latest = get_latest_2355()
-        if latest and latest != last_processed:
-            log(f"🔍 Detected new CSV: {latest}")
+        any_updated = False
+        for strategy, dir_path in STRATEGY_DIRS.items():
+            latest = get_latest_2355(dir_path)
+            prev_seen = last_processed.get(strategy)
+            s3_prev = read_current_latest_json(strategy)
+            log(f"🧭 latest[{strategy}]={latest} prev_seen={prev_seen} s3_latest={s3_prev}")
+            if not latest or latest == prev_seen:
+                continue
+            any_updated = True
+            log(f"🔍 Detected new CSV for {strategy}: {latest}")
 
             # Generate execution ID and compute CSV SHA256 for idempotency
             execution_id = str(uuid.uuid4())
             log(f"🆔 Generated execution ID: {execution_id}")
 
             # Read CSV content to compute SHA256
-            tmp_path = copy_with_sudo_to_tmp(latest)
+            tmp_path = copy_with_sudo_to_tmp(latest, strategy)
             if not tmp_path:
                 log(f"❌ Failed to copy CSV {latest}")
                 continue
@@ -1022,12 +1055,12 @@ def main() -> None:
             log(f"📄 CSV SHA256: {csv_sha256}")
             
             # Check idempotency
-            if csv_sha256 == last_executed_sha256:
+            if csv_sha256 == last_executed_sha256.get(strategy):
                 log(f"⏭️ Skipping duplicate CSV {latest} (same SHA256)")
                 continue
 
             # Remember previous latest from S3 before we switch
-            prev_latest = read_current_latest_json()
+            prev_latest = read_current_latest_json(strategy)
             pre_exec_data = None
             post_exec_data = None
             baseline_data = None
@@ -1036,12 +1069,12 @@ def main() -> None:
 
             # 0) PRE-EXECUTION LOG (use previous CSV if available)
             if prev_latest:
-                prev_data = calculate_real_portfolio_value(prev_latest)
+                prev_data = calculate_real_portfolio_value(prev_latest, strategy)
                 if prev_data:
                     # Get CSV mtime
                     csv_mtime = ""
                     try:
-                        csv_stat = os.stat(os.path.join(CSV_DIRECTORY, prev_latest))
+                        csv_stat = os.stat(os.path.join(dir_path, prev_latest))
                         csv_mtime = datetime.datetime.fromtimestamp(csv_stat.st_mtime, tz=datetime.timezone.utc).isoformat()
                     except:
                         pass
@@ -1052,26 +1085,58 @@ def main() -> None:
                         'cumulative_pnl': prev_data['portfolio_value'] - 1000000,
                         'csv_mtime': csv_mtime
                     }
-                    append_log_row('pre_execution', prev_latest, prev_data['portfolio_value'], prev_data['positions_count'], prev_data['total_notional'], None)
+                    append_log_row('pre_execution', prev_latest, prev_data['portfolio_value'], prev_data['positions_count'], prev_data['total_notional'], None, strategy)
 
-            # 1) Copy and upload new CSV
-            ok_upload = upload_csv_to_s3(tmp_path, latest)
+            # Idempotency and monotonic date guards (against duplicates/older files)
+            pulse_meta = read_latest_meta_env('PULSE', strategy) or {}
+            latest_csv_on_s3 = pulse_meta.get('latest_csv') or pulse_meta.get('filename')
+            latest_sha_on_s3 = pulse_meta.get('sha256')
+
+            # Compare SHA to skip exact duplicate
+            FORCE_UPLOAD = os.getenv('FORCE_UPLOAD', '0') == '1'
+            if not FORCE_UPLOAD and latest_sha_on_s3 and latest_sha_on_s3 == csv_sha256:
+                log(f"⏭️ Skip upload for {latest}: same SHA as Pulse latest.json ({latest_sha_on_s3})")
+                last_processed[strategy] = latest
+                last_executed_sha256[strategy] = csv_sha256
+                continue
+
+            # Compare filename date to enforce monotonic non-decreasing dates
+            # Accept same-day or newer; reject strictly older than S3 latest filename
+            try:
+                def parse_stamp(name: str) -> tuple:
+                    # expected patterns like monitor_signal_DF_YYYYMMDD-HHMM.csv
+                    import re
+                    m = re.search(r'(\d{8})-(\d{4})', name or '')
+                    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+                cand_d, cand_t = parse_stamp(latest)
+                prev_d, prev_t = parse_stamp(latest_csv_on_s3 or '')
+                if not FORCE_UPLOAD and (cand_d, cand_t) < (prev_d, prev_t):
+                    log(f"⏭️ Skip upload for {latest}: older than Pulse latest.csv ({latest_csv_on_s3})")
+                    last_processed[strategy] = latest
+                    last_executed_sha256[strategy] = csv_sha256
+                    continue
+            except Exception as e:
+                log(f"WARN: date-guard parse failed for {latest}: {e}")
+
+            # 1) Copy and upload new CSV (may upload if content differs or filename newer)
+            ok_upload = upload_csv_to_both_envs(tmp_path, latest, strategy)
             if not ok_upload:
                 errors.append(f"CSV upload failed for {latest}")
 
-            # 2) Update dashboard (optional legacy step)
-            ok_dash = ok_upload and update_dashboard_html_on_s3(latest)
-            log(f"📊 ok_dash = {ok_dash} (upload: {ok_upload}, dashboard_update: {update_dashboard_html_on_s3(latest)})")
+            # 2) Dashboard stamping removed (legacy)
+            ok_dash = False
+            log(f"📊 ok_dash({strategy}) skipped (legacy removed)")
 
             # 3) Update latest.json for the dashboard to discover new file
-            ok_latest = write_latest_json(latest)
-            log(f"📄 ok_latest = {ok_latest} (latest.json write result)")
+            ok_latest = write_latest_json_both(latest, strategy, csv_sha256)
+            log(f"📄 ok_latest({strategy}) = {ok_latest} (latest.json write result)")
 
             # 3b) Write detection-only snapshot and EXIT early (no execution now)
-            write_pre_execution_pending(latest, csv_sha256)
-            last_processed = latest
-            last_executed_sha256 = csv_sha256
-            log('⏹️ Detection pipeline complete (pre_execution.json written); deferring execution to scheduled time')
+            write_pre_execution_pending(latest, csv_sha256, strategy)
+            last_processed[strategy] = latest
+            last_executed_sha256[strategy] = csv_sha256
+            log(f'⏹️ Detection pipeline complete for {strategy} (pre_execution.json written); deferring execution to scheduled time')
+            # Next strategy
             continue
 
             # 4) POST-EXECUTION LOG using new CSV; compute daily vs pre if we logged it
@@ -1142,101 +1207,11 @@ def main() -> None:
                 pre_exec_data, post_exec_data, baseline_data, first_tick_data, rolling_ticks, errors, []
             )
 
-            # 7) If all good, send email once per day
-            email_conditions = ok_dash and ok_latest and post_ok
-            log(f"📧 Email conditions: ok_dash={ok_dash}, ok_latest={ok_latest}, post_ok={post_ok}")
-            log(f"📧 Will send email: {email_conditions}")
-
-            if email_conditions:
-                subject = f"📊 Signal Dashboard: Daily Execution Summary ({latest})"
-                log(f"📧 Email subject: {subject}")
-                
-                # Format trades table from CSV
-                trades_table = format_csv_trades_for_email(csv_content)
-                
-                # Get execution time from CSV filename (extract timestamp)
-                execution_time = "Unknown"
-                try:
-                    # Extract timestamp from filename like "lpxd_external_advisors_DF_20250918-2355.csv"
-                    timestamp_part = latest.split('_')[-1].replace('.csv', '')
-                    date_part = timestamp_part[:8]  # 20250918
-                    time_part = timestamp_part[9:]  # 2355
-                    if len(date_part) == 8 and len(time_part) == 4:
-                        execution_time = f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]} {time_part[:2]}:{time_part[2:4]} UTC"
-                except:
-                    execution_time = latest
-                
-                html = f"""
-                <html>
-                <head>
-                    <style>
-                        body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                        .header {{ background-color: #007bff; color: white; padding: 15px; border-radius: 5px; }}
-                        .content {{ margin: 20px 0; }}
-                        .status {{ background-color: #d4edda; border: 1px solid #c3e6cb; padding: 10px; border-radius: 5px; }}
-                        .footer {{ margin-top: 30px; font-size: 12px; color: #666; }}
-                    </style>
-                </head>
-                <body>
-                    <div class="header">
-                        <h2>📊 Daily Portfolio Execution Summary</h2>
-                    </div>
-                    
-                    <div class="content">
-                        <div class="status">
-                            <h3>✅ Execution Status</h3>
-                            <p><strong>CSV File:</strong> {latest}</p>
-                            <p><strong>Execution Time:</strong> {execution_time}</p>
-                            <p><strong>SHA256:</strong> {csv_sha256[:16]}...</p>
-                            <p><strong>Execution ID:</strong> {execution_id}</p>
-                            <p><strong>Processed At:</strong> {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
-                        </div>
-                        
-                        {trades_table}
-                        
-                        <div class="status">
-                            <h3>📈 Portfolio Metrics</h3>
-                            <p><strong>Pre-Execution Portfolio Value:</strong> ${pre_exec_data.get('portfolio_value', 0):,.2f if pre_exec_data else 'N/A'}</p>
-                            <p><strong>Post-Execution Portfolio Value:</strong> ${post_exec_data.get('portfolio_value', 0):,.2f if post_exec_data else 'N/A'}</p>
-                            <p><strong>Baseline Prices Set:</strong> ✅ Ready for next day's P&L calculations</p>
-                        </div>
-                        
-                        <p><strong>Pipeline Status:</strong> ✅ CSV uploaded ➜ Dashboard updated ➜ Baseline set ➜ Daily P&L reset</p>
-                    </div>
-                    
-                    <div class="footer">
-                        <p>This is an automated summary from the Signal Dashboard system.</p>
-                        <p>Dashboard: <a href="https://admin.dfi-labs.com/signal-dashboard/">https://admin.dfi-labs.com/signal-dashboard/</a></p>
-                    </div>
-                </body>
-                </html>
-                """
-                log(f"📧 Attempting to send email...")
-                notifier.send_once_per_day(subject, html)
-                log(f"✅ Email sent successfully for {latest}")
-                last_processed = latest
-                last_executed_sha256 = csv_sha256
-            else:
-                log(f"❌ Email NOT sent - conditions not met: ok_dash={ok_dash}, ok_latest={ok_latest}, post_ok={post_ok}")
-        else:
-            log(f"🔄 No new CSV found, continuing monitoring...")
+            # 7) Legacy email removed
+        if not any_updated:
+            log(f"🔄 No new CSV found for any strategy, continuing monitoring...")
         interval = 60 if in_window else 300
         log(f"⏰ Sleeping for {interval} seconds before next check...")
-        time.sleep(interval)
-        # Check if we're past the cutoff window and no CSV arrived
-        now = datetime.datetime.utcnow()
-        in_window = compute_in_window(now)
-        
-        # If we're past the window and no CSV was processed today, write trace
-        if not in_window and last_processed is None:
-            log("No CSV by cutoff - writing execution trace")
-            write_local_execution_trace(
-                None, "", "", last_executed_sha256,
-                None, None, None, None, None, [], []
-            )
-            last_processed = "no_csv"  # Prevent writing trace again
-        
-        interval = 60 if in_window else 300
         time.sleep(interval)
     
     # Close log file and upload to S3 when monitor exits

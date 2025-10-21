@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+    <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -17,6 +17,14 @@
               if (p) p.textContent = 'Real-time monitoring for Descartes (DFI Labs)';
             });
           }
+        } catch(e) {}
+      })();
+    </script>
+    <script>
+      (function(){
+        try {
+          var now = new Date().toISOString();
+          console.log('=== PULSE AUTO TEST BANNER ===', now);
         } catch(e) {}
       })();
     </script>
@@ -214,7 +222,7 @@
                             <div class="dw-row" id="dw-provisional-row">
                                 <label class="dw-label" style="display:flex;align-items:center;gap:8px;">
                                     <input type="checkbox" id="dw-provisional" />
-                                    Include today’s provisional return
+                                    Include today's provisional return
                                 </label>
                             </div>
                             <div class="dw-row dw-note">UTC • Strategy-aware</div>
@@ -378,10 +386,38 @@
                 }
             } catch (e) { /* fail open: never block admin/demo */ }
         })();
-        // Force Pulse path (CF maps /signal-dashboard/* -> /descartes-ml/signal-dashboard/*)
-        DATA_PREFIX = '/signal-dashboard/data/';
-        try { localStorage.setItem('DATA_PREFIX', DATA_PREFIX); } catch (e) {}
+        // On Pulse: keep root data (prices, baseline, PV log) under /signal-dashboard/data/
+        // but fetch strategy CSV/"latest.json" from the strategy subpath.
+        let CSV_PREFIX = localStorage.getItem('CSV_PREFIX') || '';
+        if (IS_PULSE) {
+            DATA_PREFIX = '/signal-dashboard/data/';
+            // IMPORTANT: CloudFront origin for Pulse already has OriginPath=/descartes-ml
+            // So client paths must NOT include /descartes-ml/
+            CSV_PREFIX = '/signal-dashboard/data/combined_descartes_unravel/';
+            try { localStorage.setItem('DATA_PREFIX', DATA_PREFIX); } catch (e) {}
+            try { localStorage.setItem('CSV_PREFIX', CSV_PREFIX); } catch (e) {}
+        }
         console.log('🔗 DATA_PREFIX =', DATA_PREFIX);
+        if (CSV_PREFIX) console.log('🔗 CSV_PREFIX =', CSV_PREFIX);
+
+        // Heartbeat: ping access logger with session cookie every 60s
+        (function heartbeat(){
+            try {
+                const cfgFetch = fetch('/pulse/access/config.json?cb=' + Date.now(), { cache:'no-store' })
+                  .then(r=>r.ok?r.json():{}).catch(()=>({}));
+                const session = (document.cookie||'').split('; ').find(x=>x.startsWith('pulse_session='));
+                const payload = session ? session.split('=')[1] : '';
+                cfgFetch.then(cfg=>{
+                    const url = (cfg && cfg.ACCESS_REPORT_URL) || '';
+                    const decoded = payload ? JSON.parse(atob(payload)) : {};
+                    const email = decoded.email || '';
+                    if (url && email) {
+                        fetch(url, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ action:'ping', email }) }).catch(()=>{});
+                    }
+                });
+            } catch(_) { }
+            setTimeout(heartbeat, 60000);
+        })();
 
         // Helper to resolve a symbol safely from a position row
         function resolveSymbolFromPosition(p) {
@@ -391,7 +427,8 @@
                     console.log('⚠️ Missing symbol in position row:', p);
                     return null;
                 }
-                return String(raw).replace('_','').replace('-','');
+                const s = String(raw).trim().toUpperCase().replace(/[_-]/g, '');
+                return s;
             } catch (err) {
                 console.log('⚠️ Error resolving symbol from position:', err, p);
                 return null;
@@ -438,18 +475,20 @@
         // Load current positions from latest.json (single source of truth)
         async function loadDailyCSV() {
             try {
-                // Primary source: latest.json (authoritative for both strategies)
-                const latestRes = await fetch(`${DATA_PREFIX}latest.json?cb=${Date.now()}`, { cache: 'no-store' });
+                // Primary source for positions: strategy latest.json under CSV_PREFIX
+                const latestRes = await fetch(`${(typeof CSV_PREFIX==='string'&&CSV_PREFIX)||DATA_PREFIX}latest.json?cb=${Date.now()}`, { cache: 'no-store' });
                 if (!latestRes.ok) {
                     console.log('⚠️ latest.json not found, falling back to pre_execution.json');
                 }
                 let csvFilename = null;
                 let uploadedUtc = null;
+                let csvVersion = null;
                 if (latestRes.ok) {
                     const latestText = await latestRes.text();
                     try {
                         const latest = JSON.parse(latestText.trim());
                         csvFilename = latest.filename || latest.csv_filename || latest.file || latest.csv;
+                        csvVersion = latest.version_id || latest.version || latest.etag || null;
                         uploadedUtc = latest.updated_utc || latest.updated || latest.timestamp_utc || null;
                         // Prefer explicit strategy/source from latest.json when present
                         if (latest.source || latest.strategy) {
@@ -458,6 +497,19 @@
                     } catch (e) {
                         console.warn('⚠️ Could not parse latest.json, text=', latestText);
                     }
+                }
+                // Fallback: try a default strategy path if CSV_PREFIX failed
+                if (!csvFilename) {
+                    try {
+                        const fallbackPrefix = '/signal-dashboard/data/combined_descartes_unravel/';
+                        const alt = await fetch(`${fallbackPrefix}latest.json?cb=${Date.now()}`, { cache: 'no-store' });
+                        if (alt.ok) {
+                            const t = await alt.text();
+                            const j = JSON.parse(t.trim());
+                            csvFilename = j.filename || j.latest_csv || null;
+                            uploadedUtc = j.updated_utc || j.updated || j.timestamp_utc || uploadedUtc;
+                        }
+                    } catch(_) {}
                 }
                 
                 // Fallback: pre_execution.json if latest.json missing
@@ -491,21 +543,40 @@
                 updateCSVFilename(csvFilename, uploadedUtc);
                 
                 // Load positions from the CSV file
-                const portfolioResponse = await fetch(`${DATA_PREFIX}${csvFilename}`);
+                const verParam = (typeof csvVersion === 'string' && csvVersion) ? `?v=${encodeURIComponent(csvVersion)}` : `?cb=${Date.now()}`;
+                const csvBase = (typeof CSV_PREFIX==='string'&&CSV_PREFIX) || DATA_PREFIX;
+                const portfolioResponse = await fetch(`${csvBase}${csvFilename}${verParam}`, { cache: 'no-store' });
                 const portfolioCsv = await portfolioResponse.text();
-                const portfolioLines = portfolioCsv.split('\n');
-                const portfolioHeaders = portfolioLines[0].split(',');
+                const portfolioLines = portfolioCsv.split('\n').filter(Boolean);
+                const portfolioHeaders = (portfolioLines[0]||'').split(',');
+                
+                const idx = (name) => portfolioHeaders.findIndex(h => h.trim() === name);
+                const iTicker = idx('ticker') >= 0 ? idx('ticker') : idx('product');
+                const iWeight = idx('target_weight');
+                const iRef = idx('ref_price');
                 
                 const positions = [];
                 for (let i = 1; i < portfolioLines.length; i++) {
-                    if (portfolioLines[i].trim()) {
-                        const values = portfolioLines[i].split(',');
-                        const position = {};
-                        portfolioHeaders.forEach((header, index) => {
-                            position[header.trim()] = values[index] ? values[index].trim() : '';
-                        });
-                        positions.push(position);
+                    const line = portfolioLines[i].trim();
+                    if (!line) continue;
+                    const values = line.split(',');
+                    const raw = {};
+                    portfolioHeaders.forEach((header, index) => {
+                        raw[header.trim()] = values[index] ? values[index].trim() : '';
+                    });
+                    const ticker = (iTicker >= 0 ? (values[iTicker]||'') : (raw.ticker||raw.product||''))
+                        .trim().toUpperCase().replace(/[_-]/g,'');
+                    let notional = parseFloat(raw.target_notional || '');
+                    let contracts = parseFloat(raw.target_contracts || '');
+                    // Derive from weight if needed (use fixed $1,000,000 reference, never pv_pre)
+                    const w = iWeight >= 0 ? parseFloat(values[iWeight]||'') : NaN;
+                    if ((!Number.isFinite(notional) || notional === 0) && Number.isFinite(w) && w !== 0) {
+                        const refCap = 1000000; // fixed reference capital for weights
+                        notional = Math.abs(w) * refCap;
+                        contracts = w > 0 ? 1 : -1;
                     }
+                    const entry = (iRef >= 0 ? parseFloat(values[iRef]||'') : NaN);
+                    positions.push({ ...raw, ticker, target_notional: String(notional||''), target_contracts: String(contracts||''), ref_price: Number.isFinite(entry)? String(entry): (raw.ref_price||'') });
                 }
                 
                 console.log(`Loaded ${positions.length} positions from ${csvFilename}`);
@@ -522,6 +593,8 @@
                 lastGoodDailyPnL = null;
                 currentSnapshot.dailyPnL = undefined;
                 console.log('Daily CSV loaded, baseline set; cleared lastGoodDailyPnL and will compute fresh');
+                // Render immediately once positions and baseline are ready
+                try { updateUI(); } catch(e) { console.log('updateUI after CSV load failed', e); }
                 return true; // CSV changed
                 
             } catch (error) {
@@ -533,16 +606,28 @@
         // Load baseline prices from daily_baseline.json (with diagnostics)
         async function fetchBaselinePrices(positions) {
             try {
-                const response = await fetch(`${DATA_PREFIX}daily_baseline.json?cb=${Date.now()}`, { cache: 'no-store' });
+                const basePath = (typeof CSV_PREFIX === 'string' && CSV_PREFIX) ? CSV_PREFIX : DATA_PREFIX;
+                const url = `${basePath}daily_baseline.json?cb=${Date.now()}`;
+                if (DIAG) console.log('🧩 Fetching baseline from:', url);
+                const response = await fetch(url, { cache: 'no-store' });
                 if (!response.ok) return {};
                 const baseline = await response.json();
-                const prices = baseline.prices || {};
+                const raw = baseline.ref_prices || baseline.prices || {};
+                // Normalize keys (trim/upper/strip underscores & hyphens) and coerce numeric values
+                const prices = {};
+                try {
+                    Object.keys(raw).forEach((k)=>{
+                        const nk = String(k).trim().toUpperCase().replace(/[_-]/g,'');
+                        const v = raw[k];
+                        prices[nk] = (typeof v === 'string') ? parseFloat(v) : v;
+                    });
+                } catch(_){ }
                 if (DIAG) {
                     try {
-                        const probe = ['BTCUSDT','ETHUSDT','BNBUSDT'];
+                        const probe = ['ENAUSDT','BTCUSDT','ETHUSDT'];
                         const sample = probe.map(sym => ({ sym, entry: prices[sym] ?? null }));
-                        console.log('[DIAG] baseline@', baseline.timestamp_utc, 'pv_pre=', baseline.pv_pre, sample);
-                    } catch(_){}
+                        console.log('[DIAG] baseline@', baseline.executed_at_utc || baseline.timestamp_utc, 'pv_pre=', (baseline.pv_pre||'n/a'), 'keys=', Object.keys(prices).length, 'sample=', sample);
+                    } catch(_){ }
                 }
                 return prices;
             } catch (error) {
@@ -555,7 +640,8 @@
         async function loadPVPre() {
             try {
                 console.log('🔍 Loading PV_pre from pre_execution.json...');
-                const response = await fetch(`${DATA_PREFIX}pre_execution.json?cb=${Date.now()}`, { cache: 'no-store' });
+                const basePath = (typeof CSV_PREFIX === 'string' && CSV_PREFIX) ? CSV_PREFIX : DATA_PREFIX;
+                const response = await fetch(`${basePath}pre_execution.json?cb=${Date.now()}`, { cache: 'no-store' });
                 if (!response.ok) throw new Error(`pre_execution.json ${response.status}`);
                 const data = await response.json();
                 const num = Number(data.pv_pre);
@@ -601,10 +687,20 @@
                 console.log('🧾 latest_prices.json payload keys =', Object.keys(data));
                 const prices = data.prices || data || {};
                 const currentPrices = {};
+                const alias = (s)=>({
+                    'SHIBUSDT':'1000SHIBUSDT',
+                    'PEPEUSDT':'1000PEPEUSDT',
+                    'XECUSDT':'1000XECUSDT',
+                    'SATSUSDT':'1000SATSUSDT',
+                    'RATSUSDT':'1000RATSUSDT',
+                    'FLOKIUSDT':'1000FLOKIUSDT',
+                    'LUNCUSDT':'1000LUNCUSDT',
+                    'XUSDT':'1000XUSDT'
+                }[s] || s);
                 const symbols = positions.map(p => resolveSymbolFromPosition(p)).filter(Boolean);
                 console.log('🧩 Resolving currentPrices for symbols =', symbols);
                 symbols.forEach(symbol => {
-                    const price = prices[symbol];
+                    const price = prices[symbol] ?? prices[alias(symbol)];
                     currentPrices[symbol] = (price !== undefined && price !== null) ? parseFloat(price) : null;
                 });
                 console.log(`📊 Loaded ${Object.keys(currentPrices).length}/${symbols.length} prices from S3`);
@@ -620,6 +716,54 @@
             console.log('🔄 Creating new snapshot...', new Date().toISOString());
             console.log('📊 Using S3 logs as single source of truth for all calculations');
             
+            // EXEC TRACE banner (expanded)
+            try {
+                console.log('=== EXEC TRACE BEGIN ===');
+                console.log('Now UTC:', new Date().toISOString());
+                console.log('DATA_PREFIX:', DATA_PREFIX);
+                if (CSV_PREFIX) console.log('CSV_PREFIX:', CSV_PREFIX);
+                try {
+                    const latestResp = await fetch(`${CSV_PREFIX || DATA_PREFIX}latest.json?cb=${Date.now()}`, { cache: 'no-store' });
+                    if (latestResp.ok) {
+                        const latestDoc = await latestResp.json();
+                        console.log('latest.json csv:', latestDoc.latest_csv || latestDoc.filename);
+                    }
+                } catch(_) {}
+                try {
+                    const preExecResp = await fetch(`${CSV_PREFIX || DATA_PREFIX}pre_execution.json?cb=${Date.now()}`, { cache: 'no-store' });
+                    if (preExecResp.ok) {
+                        const preDoc = await preExecResp.json();
+                        console.log('pv_pre:', preDoc.pv_pre, 'executed_at_utc:', preDoc.executed_at_utc);
+                    }
+                } catch(_) {}
+                try {
+                    const baseResp = await fetch(`${CSV_PREFIX || DATA_PREFIX}daily_baseline.json?cb=${Date.now()}`, { cache: 'no-store' });
+                    if (baseResp.ok) {
+                        const baseDoc = await baseResp.json();
+                        const u = Array.isArray(baseDoc.universe) ? baseDoc.universe : [];
+                        console.log('baseline.universe_count:', u.length);
+                    }
+                } catch(_) {}
+                try {
+                    const priceResp = await fetch(`${DATA_PREFIX}latest_prices.json?cb=${Date.now()}`, { cache: 'no-store' });
+                    if (priceResp.ok) {
+                        const priceDoc = await priceResp.json();
+                        const keys = Object.keys(priceDoc.prices || priceDoc || {});
+                        console.log('latest_prices symbols:', keys.length);
+                    }
+                } catch(_) {}
+                try {
+                    const pvResp = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache: 'no-store' });
+                    if (pvResp.ok) {
+                        const pvText = await pvResp.text();
+                        const lines = pvText.trim().split('\n').filter(Boolean);
+                        const tail = lines.slice(-3).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+                        console.log('PV tail (3):', tail.map(r => ({ t: r.timestamp, src: r.audit && r.audit.source })));
+                    }
+                } catch(_) {}
+                console.log('=== EXEC TRACE END ===');
+            } catch(_){ }
+
             // Load latest S3 data first
             try {
                 // Add cache-busting parameter to force fresh data
@@ -1101,9 +1245,12 @@
             document.getElementById('short-pnl-percent').className = `percentage ${shortPnL >= 0 ? 'positive' : 'negative'}`;
             document.getElementById('short-count').textContent = `${shortCount} positions`;
             
-            // Update total positions count (count only non-zero contracts)
-            const totalPositions = (longCount || 0) + (shortCount || 0);
-            document.getElementById('total-positions-count').textContent = totalPositions.toString();
+            // Update total positions count. Prefer CSV rows; if empty (e.g., parse delay),
+            // fall back to baseline ref_prices count from daily_baseline.json
+            const csvCount = (snapshot.positions && snapshot.positions.length) || 0;
+            const baselineCount = (snapshot.baselinePrices && Object.keys(snapshot.baselinePrices).length) || 0;
+            const totalPositions = csvCount || baselineCount;
+            document.getElementById('total-positions-count').textContent = String(totalPositions);
             
             // Update delta progress bar
             createDeltaProgressBar();
@@ -1179,11 +1326,53 @@
             
             positions.forEach(position => {
                 const symbol = position.ticker || position.ric || position.internal_code || 'N/A';
-                const binanceSymbol = symbol.replace('_', '');
-                // Removed entry-based metrics by request
-                const entryPrice = snapshot.baselinePrices[binanceSymbol];
-                const baselinePrice = snapshot.baselinePrices[binanceSymbol];
-                const currentPrice = snapshot.currentPrices[binanceSymbol];
+                const binanceSymbol = String(symbol).trim().toUpperCase().replace(/[_-]/g,'');
+                const alias = (s)=>({
+                    'SHIBUSDT':'1000SHIBUSDT',
+                    'PEPEUSDT':'1000PEPEUSDT',
+                    'XECUSDT':'1000XECUSDT',
+                    'SATSUSDT':'1000SATSUSDT',
+                    'RATSUSDT':'1000RATSUSDT',
+                    'FLOKIUSDT':'1000FLOKIUSDT',
+                    'LUNCUSDT':'1000LUNCUSDT',
+                    'XUSDT':'1000XUSDT'
+                }[s] || s);
+                const lookup = alias(binanceSymbol);
+                const reverseAlias = (s)=>({
+                    '1000SHIBUSDT':'SHIBUSDT',
+                    '1000PEPEUSDT':'PEPEUSDT',
+                    '1000XECUSDT':'XECUSDT',
+                    '1000SATSUSDT':'SATSUSDT',
+                    '1000RATSUSDT':'RATSUSDT',
+                    '1000FLOKIUSDT':'FLOKIUSDT',
+                    '1000LUNCUSDT':'LUNCUSDT',
+                    '1000XUSDT':'XUSDT'
+                }[s] || s);
+                // Entry must come from execution baseline (Binance snapshot). Coerce numeric if values are string-encoded.
+                const toNum = (v) => {
+                    if (v === null || v === undefined) return null;
+                    const n = (typeof v === 'string') ? parseFloat(v) : v;
+                    return (typeof n === 'number' && isFinite(n)) ? n : null;
+                };
+                let entryPrice = toNum(
+                    snapshot.baselinePrices && (
+                        snapshot.baselinePrices[binanceSymbol] ??
+                        snapshot.baselinePrices[reverseAlias(binanceSymbol)] ??
+                        snapshot.baselinePrices[lookup] ??
+                        snapshot.baselinePrices[reverseAlias(lookup)]
+                    )
+                );
+                if (DIAG) {
+                    try {
+                        console.log('[ROW]', symbol, {
+                            binanceSymbol,
+                            lookup,
+                            entry_from: (entryPrice!=null)?'baseline':'-'
+                        });
+                    } catch(_){}
+                }
+                const baselinePrice = entryPrice; // explicit
+                const currentPrice = (snapshot.currentPrices[binanceSymbol] ?? snapshot.currentPrices[lookup] ?? null);
                 const notional = parseFloat(position.target_notional || 0);
                 const side = parseFloat(position.target_contracts) > 0 ? 'LONG' : 'SHORT';
                 const weight = (Math.abs(notional) / refCap) * 100;
@@ -1204,15 +1393,11 @@
                 const row = document.createElement('tr');
                 row.className = 'position-row';
                 
-                // Add winning position highlight
+                // Row highlight: green when positive, orange when negative
                 if (dailyPnl > 0) {
                     row.classList.add('winning');
-                }
-                
-                // Add top performer highlight (top 3 by absolute P&L)
-                const isTopPerformer = checkIfTopPerformer(symbol, dailyPnl, side);
-                if (isTopPerformer) {
-                    row.classList.add('top-performer');
+                } else if (dailyPnl < 0) {
+                    row.classList.add('losing');
                 }
                 
                 row.innerHTML = `
@@ -1220,8 +1405,8 @@
                     <td class="${side === 'LONG' ? 'side-long' : 'side-short'}">${side}</td>
                     <td>${weight.toFixed(2)}%</td>
                     <td>${formatCurrency(Math.abs(notional))}</td>
-                    <td>${entryPrice ? formatCurrency(entryPrice) : '-'}</td>
-                    <td>${currentPrice ? formatCurrency(currentPrice) : 'Loading...'}</td>
+                    <td>${(Number.isFinite(entryPrice)) ? formatCurrency(entryPrice) : '-'}</td>
+                    <td>${(typeof currentPrice === 'number') ? formatCurrency(currentPrice) : 'Loading...'}</td>
                     <td class="${dailyPnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(dailyPnl)}</td>
                     <td class="${dailyPnlPercent >= 0 ? 'positive' : 'negative'}">${dailyPnlPercent.toFixed(2)}%</td>
                 `;
@@ -1292,12 +1477,46 @@
 
         // Load historical PV data
         async function loadHistoricalPVData(timeframe) {
-            // For long windows, prefer canonical EOD PV CSV
+            // For 7D/1M/SI: build an EOD series by merging CSV with any newer PV‑log EOD closes
             if (timeframe === '7D' || timeframe === '1M' || timeframe === 'SI') {
-                const days = (timeframe === '7D') ? 7 : (timeframe === '1M' ? 30 : null);
-                const eod = await loadEodPVData(days);
-                return eod;
+                try {
+                    const csvTxt = await fetch(`${DATA_PREFIX}eod_pv.csv?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
+                    let rows = [];
+                    if (csvTxt) {
+                        let lines = csvTxt.trim().split('\n').filter(Boolean);
+                        const header = (lines[0]||'').toLowerCase();
+                        if (header.includes('date') && header.includes('pv')) lines = lines.slice(1);
+                        rows = lines.map(line=>{ const [d,p]=line.split(','); const pv=Number(p); if (!d||!Number.isFinite(pv)) return null; return { d:String(d).trim(), pv }; }).filter(Boolean);
+                    }
+                    // Derive EOD closes from PV log
+                    const jlTxt = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
+                    let closes = [];
+                    if (jlTxt) {
+                        const dayKey = ts => { const d=new Date(ts); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString().slice(0,10); };
+                        const rowsJ = jlTxt.trim().split('\n').map(l=>{ try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+                        const by = new Map();
+                        rowsJ.forEach(r=>{ const k=dayKey(r.timestamp); const arr=by.get(k)||[]; arr.push(r); by.set(k,arr); });
+                        const days = [...by.keys()].sort();
+                        closes = days.map(k=>{ const pts=by.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp)); const last=pts[pts.length-1]; const pv=(last?.portfolio_value ?? last?.portfolioValue); return (typeof pv==='number') ? { d:k, pv } : null; }).filter(Boolean);
+                    }
+                    // Merge CSV base with any newer log closes
+                    let merged = rows.slice();
+                    if (!merged.length) merged = closes.slice();
+                    else if (closes.length) {
+                        const lastCsv = merged[merged.length-1].d;
+                        const toAppend = closes.filter(r=> r.d > lastCsv);
+                        if (toAppend.length) merged = merged.concat(toAppend);
+                    }
+                    // Map to chart points
+                    let points = merged.map(r => ({ timestamp: new Date(`${r.d}T23:59:59Z`).toISOString(), portfolio_value: r.pv }));
+                    if (timeframe === '7D' && points.length > 7) points = points.slice(-7);
+                    if (timeframe === '1M' && points.length > 30) points = points.slice(-30);
+                    return points;
+                } catch (e) {
+                    console.warn('EOD merge load failed, falling back to PV log', e);
+                }
             }
+            // Else: use PV log intraday (1D/7D)
             try {
                 const cacheBuster = new Date().getTime();
                 const response = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${cacheBuster}`, {
@@ -1640,14 +1859,16 @@
                                 caretPadding: 8,
                                 callbacks: {
                                     title: function(context) {
-                                        const date = new Date(context[0].label);
-                                        return date.toLocaleString('en-US', {
+                                        const ts = (context && context[0] && (context[0].parsed && context[0].parsed.x)) || null;
+                                        const date = ts ? new Date(ts) : new Date();
+                                        return new Intl.DateTimeFormat('en-US', {
                                             weekday: 'short',
                                             month: 'short',
                                             day: 'numeric',
                                             hour: '2-digit',
-                                            minute: '2-digit'
-                                        });
+                                            minute: '2-digit',
+                                            timeZone: 'UTC'
+                                        }).format(date);
                                     },
                                     label: function(context) {
                                         return `Portfolio: ${formatCurrency(context.parsed.y)}`;
@@ -2184,17 +2405,23 @@
             const dwStart = document.getElementById('dw-start');
             const dwEnd = document.getElementById('dw-end');
             const dwPresets = document.querySelectorAll('.dw-presets button');
+            // Last available UTC day from S3 PV log; set later when history loads
+            let LAST_UTC_DAY = null;
             const setPreset = (days) => {
-                const today = new Date();
-                const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+                // Use last available UTC day from S3 if known; else today (UTC)
+                const now = new Date();
+                const fallbackEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+                const end = LAST_UTC_DAY ? new Date(LAST_UTC_DAY + 'T00:00:00Z') : fallbackEnd;
                 let start;
                 if (days === 'all') {
-                    // leave start empty to indicate full history
+                    // Full history: start empty, end = last available day (dynamic)
                     dwStart.value = '';
                     dwEnd.value = end.toISOString().slice(0,10);
                     return;
                 }
-                start = new Date(end.getTime() - Number(days) * 24*60*60*1000);
+                const n = Number(days) || 7;
+                // Inclusive window of n days ending at 'end': subtract n-1 days
+                start = new Date(end.getTime() - (n - 1) * 24*60*60*1000);
                 dwStart.value = start.toISOString().slice(0,10);
                 dwEnd.value = end.toISOString().slice(0,10);
             };
@@ -2239,167 +2466,116 @@
                     try {
                         const fmt = (document.getElementById('dw-format')?.value || 'csv');
                         const series = (document.getElementById('dw-series')?.value || 'daily_returns');
-                        // Normalize date inputs from either YYYY-MM-DD or DD/MM/YYYY
-                        const normalizeDate = (s) => {
-                            if (!s) return '';
-                            if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s; // ISO
-                            if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
-                                const [dd, mm, yyyy] = s.split('/');
-                                return `${yyyy}-${mm}-${dd}`; // to ISO
+                        // Helper: UTC day key
+                        const dayKey = (ts) => { const d = new Date(ts); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString().slice(0,10); };
+                        const normalizeDate = (s) => { if (!s) return ''; if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s; const d = new Date(s); return isNaN(d.getTime()) ? '' : d.toISOString().slice(0,10); };
+
+                        // Load eod_pv.csv (historical) and PV log (intraday) for a merged EOD series
+                        const csvTxt = await fetch(`${DATA_PREFIX}eod_pv.csv?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
+                        const jlTxt  = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
+                        if (!csvTxt && !jlTxt) throw new Error('No data available');
+
+                        // Parse eod csv -> [{Date,PV}]
+                        const eodCsv = [];
+                        if (csvTxt) {
+                            const lines = csvTxt.trim().split('\n');
+                            if (lines.length) {
+                                const header = (lines[0]||'').toLowerCase();
+                                const start = header.includes('date') ? 1 : 0;
+                                for (let i=start;i<lines.length;i++){
+                                    const [d,pv] = lines[i].split(',');
+                                    const dd = (d||'').trim(); const vv = parseFloat((pv||'').trim());
+                                    if (dd && !isNaN(vv)) eodCsv.push({ Date:dd, PV:vv });
+                                }
                             }
-                            // Fallback: try Date parse
-                            const d = new Date(s);
-                            if (!isNaN(d.getTime())) return d.toISOString().slice(0,10);
-                            return '';
-                        };
-                        let startStr = normalizeDate(dwStart.value);
-                        let endStr = normalizeDate(dwEnd.value);
-                        // If "All" preset is active, ignore any date fields
-                        try {
-                            const activePreset = document.querySelector('.dw-presets button.active')?.dataset?.preset;
-                            if (activePreset === 'all') { startStr = ''; endStr = ''; }
-                        } catch(_) {}
+                        }
 
-                        // Load canonical EOD PV history (full history)
-                        const eodUrl = `${DATA_PREFIX}eod_pv.csv?cb=${Date.now()}`;
-                        console.log('⬇️ Download request:', { series, fmt, eodUrl, startStr, endStr });
-                        const eodText = await fetch(eodUrl, { cache: 'no-store' }).then(r => r.ok ? r.text() : '');
-
-                        let eod = [];
-                        if (eodText) {
-                            const lines = eodText.trim().split('\n');
-                            const header = (lines[0] || '').toLowerCase();
-                            if (header.includes('date') && header.includes('pv')) lines.shift();
-                            lines.forEach(line => {
-                                const [d, pvRaw] = line.split(',');
-                                const pv = Number(pvRaw);
-                                if (d && !Number.isNaN(pv)) eod.push({ Date: d.trim(), PV: pv });
+                        // Parse PV log and take last point per UTC day
+                        const byDay = new Map();
+                        if (jlTxt) {
+                            jlTxt.trim().split('\n').forEach(line => {
+                                try { const r = JSON.parse(line); const k = dayKey(r.timestamp); const arr = byDay.get(k) || []; arr.push(r); byDay.set(k, arr); } catch {}
                             });
                         }
+                        const pvlogEod = [];
+                        [...byDay.keys()].sort().forEach(k => {
+                            const pts = byDay.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp));
+                            const last = pts[pts.length-1];
+                            const pvClose = (last?.portfolio_value ?? last?.portfolioValue);
+                            if (typeof pvClose === 'number') pvlogEod.push({ Date:k, PV: pvClose });
+                        });
 
-                        if (!eod.length) {
-                            throw new Error('No EOD PV history available');
-                        }
+                        // Merge: eodCsv first (historical), then override with pvlogEod for overlapping/newer days
+                        const merged = new Map();
+                        eodCsv.forEach(r => merged.set(r.Date, r.PV));
+                        pvlogEod.forEach(r => merged.set(r.Date, r.PV));
+                        const allDays = [...merged.keys()].sort();
+                        const lastDay = allDays.at(-1);
+                        if (!lastDay) throw new Error('No days in merged data');
 
-                        // Resolve window: preset wins over manual dates
-                        let eodFiltered;
-                        let presetDays = null;
-                        try {
-                            const p = document.querySelector('.dw-presets button.active')?.dataset?.preset;
-                            if (p === '7' || p === '30' || p === '90') presetDays = Number(p);
-                        } catch(_) {}
-                        if (presetDays) {
-                            eodFiltered = eod.slice(-presetDays);
-                        } else if (!startStr && !endStr) {
-                            eodFiltered = eod; // ALL
-                        } else {
-                            eodFiltered = eod.filter(r => (!startStr || r.Date >= startStr) && (!endStr || r.Date <= endStr));
-                        }
+                        // Resolve window from presets/inputs, cap end at lastDay
+                        let startStr = normalizeDate(dwStart?.value);
+                        let endStr   = normalizeDate(dwEnd?.value);
+                        const activePreset = document.querySelector('.dw-presets button.active')?.dataset?.preset || null;
+                        if (activePreset === 'all') { startStr = allDays[0] || ''; endStr = lastDay; }
+                        else if (['7','30','90'].includes(activePreset||'')) {
+                            const n = Number(activePreset);
+                            const end = new Date(lastDay + 'T00:00:00Z');
+                            const start = new Date(end.getTime() - (n - 1) * 24*60*60*1000);
+                            startStr = start.toISOString().slice(0,10);
+                            endStr = lastDay;
+                        } else { if (!endStr || endStr > lastDay) endStr = lastDay; }
+                        try { if (dwStart) dwStart.value = startStr || ''; if (dwEnd) dwEnd.value = endStr || ''; } catch(_) {}
+
+                        const days = allDays.filter(k => (!startStr || k >= startStr) && (!endStr || k <= endStr));
 
                         let out = [];
                         if (series === 'daily_pv') {
-                            out = eodFiltered;
-                            // Append today's last logged PV from JSONL to ensure continuity
-                            try {
-                                const txt = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():"");
-                                if (txt) {
-                                    const lines = txt.trim().split('\n').filter(Boolean);
-                                    const last = JSON.parse(lines[lines.length-1]);
-                                    const pvNow = last.portfolio_value ?? last.portfolioValue;
-                                    const dayNow = new Date(last.timestamp).toISOString().slice(0,10);
-                                    if (typeof pvNow === 'number') {
-                                        const idx = out.findIndex(r => r.Date === dayNow);
-                                        if (idx === -1) {
-                                            out = out.concat([{ Date: dayNow, PV: pvNow }]);
-                                        } else if (Math.abs(out[idx].PV - pvNow) > 1e-6) {
-                                            // keep EOD row and add a final intraday row for today
-                                            out = out.concat([{ Date: dayNow, PV: pvNow }]);
-                                        }
-                                    }
+                            days.forEach(k => out.push({ Date:k, PV: merged.get(k) }));
+                        } else if (series === 'daily_vs_btc') {
+                            const strat = [];
+                            let prevClose = null;
+                            days.forEach(k => {
+                                const pvClose = merged.get(k);
+                                if (typeof pvClose === 'number') {
+                                    if (typeof prevClose === 'number' && prevClose > 0) strat.push({ Date:k, Strat:(((pvClose/prevClose)-1)*100).toFixed(2) });
+                                    else strat.push({ Date:k, Strat:(0).toFixed(2) });
+                                    prevClose = pvClose;
                                 }
-                            } catch(_) { /* best-effort append only */ }
+                            });
+                            const btcCsv = await fetch('/signal-dashboard/benchmarks/btc_daily_returns.csv?cb=' + Date.now(), { cache:'no-store' }).then(r=>r.ok?r.text():'');
+                            const btcMap = new Map();
+                            if (btcCsv) { const bl = btcCsv.trim().split('\n'); const h = (bl[0]||'').toLowerCase(); if (h.includes('date')) bl.shift(); bl.forEach(line=>{ const [d,p] = line.split(','); if (d) btcMap.set(d.trim(), String(p??'').trim()); }); }
+                            out = strat.map(r => ({ Date:r.Date, Performance:r.Strat, BTC_Performance:(btcMap.get(r.Date) ?? '') }));
                         } else {
-                            // Compute daily % returns strictly within the filtered window
-                            const sorted = [...eodFiltered].sort((a,b)=> a.Date.localeCompare(b.Date));
-                            const returns = [];
-                            for (let i=0;i<sorted.length;i++) {
-                                const d = sorted[i];
-                                if (i === 0) { returns.push({ Date: d.Date, Performance: (0).toFixed(2) }); continue; }
-                                const prev = sorted[i-1];
-                                const ret = (d.PV/prev.PV - 1) * 100;
-                                returns.push({ Date: d.Date, Performance: ret.toFixed(2) });
-                            }
-
-                            // Optionally append today’s provisional return versus yesterday EOD
-                            try {
-                                const wantProv = document.getElementById('dw-provisional')?.checked;
-                                if (wantProv) {
-                                    const lastEod = eod[eod.length-1]; // yesterday’s EOD if we’re before today EOD
-                                    const jl = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
-                                    if (lastEod && jl) {
-                                        const lastLine = JSON.parse(jl.trim().split('\n').filter(Boolean).slice(-1)[0]);
-                                        const pvNow = lastLine.portfolio_value ?? lastLine.portfolioValue;
-                                        const dayNow = new Date(lastLine.timestamp).toISOString().slice(0,10);
-                                        if (typeof pvNow === 'number' && lastEod && lastEod.PV > 0) {
-                                            const retNow = (pvNow/lastEod.PV - 1) * 100;
-                                            // Avoid duplicate if window already ends at dayNow
-                                            if (!returns.length || returns[returns.length-1].Date !== dayNow) {
-                                                returns.push({ Date: dayNow, Performance: retNow.toFixed(2) });
-                                            }
-                                        }
-                                    }
+                            let prevClose = null;
+                            days.forEach(k => {
+                                const pvClose = merged.get(k);
+                                if (typeof pvClose === 'number') {
+                                    if (typeof prevClose === 'number' && prevClose > 0) out.push({ Date:k, Performance:(((pvClose/prevClose)-1)*100).toFixed(2) });
+                                    else out.push({ Date:k, Performance:(0).toFixed(2) });
+                                    prevClose = pvClose;
                                 }
-                            } catch(_) { /* best-effort */ }
-
-                            if (series === 'daily_vs_btc') {
-                                // Join with BTC daily returns (best-effort)
-                                const btcUrl = '/signal-dashboard/benchmarks/btc_daily_returns.csv?cb=' + Date.now();
-                                const btcText = await fetch(btcUrl, { cache: 'no-store' }).then(r => r.ok ? r.text() : '');
-                                const btcMap = new Map();
-                                if (btcText) {
-                                    const bl = btcText.trim().split('\n');
-                                    const h = (bl[0] || '').toLowerCase();
-                                    if (h.includes('date')) bl.shift();
-                                    bl.forEach(line => { const [d, p] = line.split(','); if (d) btcMap.set(d.trim(), String(p ?? '').trim()); });
-                                }
-                                out = returns.map(r => ({ Date: r.Date, Performance: r.Performance, BTC_Performance: (btcMap.get(r.Date) ?? '') }));
-                            } else {
-                                out = returns;
-                            }
+                            });
                         }
 
-                        // Emit file
+                        // Emit
                         if (fmt === 'json') {
-                            const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
-                            const url = URL.createObjectURL(blob);
-                            const base = (series==='daily_pv') ? 'daily_pv' : (series==='daily_vs_btc' ? 'daily_vs_btc' : 'daily_returns');
-                            const a = Object.assign(document.createElement('a'), { href: url, download: `${base}_${(startStr||'ALL')}_to_${(endStr||'TODAY')}.json` });
-                            document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+                            const blob = new Blob([JSON.stringify(out)], { type:'application/json' });
+                            const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='pulse_export.json'; a.click(); URL.revokeObjectURL(url);
                         } else {
-                            let header, lines;
-                            if (series === 'daily_pv') {
-                                header = 'Date,PV';
-                                lines = out.map(r => `${r.Date},${r.PV}`);
-                            } else if (series === 'daily_vs_btc') {
-                                header = 'Date,Performance,BTC_Performance';
-                                lines = out.map(r => `${r.Date},${r.Performance},${r.BTC_Performance}`);
-                            } else {
-                                header = 'Date,Performance';
-                                lines = out.map(r => `${r.Date},${r.Performance}`);
-                            }
-                            const csv = [header].concat(lines).join('\n');
-                            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-                            const url = URL.createObjectURL(blob);
-                            const base = (series==='daily_pv') ? 'daily_pv' : (series==='daily_vs_btc' ? 'daily_vs_btc' : 'daily_returns');
-                            const a = Object.assign(document.createElement('a'), { href: url, download: `${base}_${(startStr||'ALL')}_to_${(endStr||'TODAY')}.csv` });
-                            document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+                            const headers = Object.keys(out[0]||{ Date:'', Performance:'' });
+                            const csv = [headers.join(',')].concat(out.map(r => headers.map(h=>r[h]??'').join(','))).join('\n');
+                            const blob = new Blob([csv], { type:'text/csv' });
+                            const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='pulse_export.csv'; a.click(); URL.revokeObjectURL(url);
                         }
                     } catch (e) {
-                        console.warn('Download failed', e);
-                        try { alert('Download failed: ' + (e && e.message ? e.message : e)); } catch(_) {}
+                        console.error('Download error:', e);
+                        alert('Download failed: ' + (e?.message || e));
                     }
                 });
             }
+            // After history loads we will set LAST_UTC_DAY; also reapply active preset window
             // Initialize strategy selector and persist choice
             const sel = document.getElementById('strategy-select');
             if (sel) {
@@ -2644,8 +2820,8 @@
                 updateChart(displayData, timeframe);
                 console.log(`📊 Chart updated for ${timeframe} with ${displayData.length} points`);
 
-                // Refresh S3-derived metric cards (avg daily return, vol, sharpe)
-                updateS3MetricsCards();
+                // Refresh metrics from S3 (avg daily return, vol, sharpe)
+                initializeMetrics();
             } catch (error) {
                 console.error('Error updating chart from S3:', error);
                 console.log('📊 Keeping current chart data due to error');
@@ -2763,26 +2939,43 @@
             section.style.display = 'block';
         }
 
-        // Cache SI daily returns for metrics to avoid refetching
-        let METRICS_DAILY_ALL = null; // numbers in decimal (not %)
-
+        // Compute SI daily returns by merging CSV with any newer EOD closes from PV log (read-only)
         async function ensureMetricsDaily() {
-            if (Array.isArray(METRICS_DAILY_ALL)) return METRICS_DAILY_ALL;
-            // Use EOD CSV for stable daily metrics
-            const eodText = await fetch(`${DATA_PREFIX}eod_pv.csv?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
-            const rows = [];
-            if (eodText) {
-                const lines = eodText.trim().split('\n');
-                if (lines.length && /pv/i.test(lines[0]) && /date/i.test(lines[0])) lines.shift();
-                lines.forEach(line => { const [d,p] = line.split(','); if (d && p) rows.push({ d, p: Number(p) }); });
+            const dayKey = ts => { const d=new Date(ts); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString().slice(0,10); };
+            // CSV base
+            let csvRows = [];
+            try {
+                const csv = await fetch(`${DATA_PREFIX}eod_pv.csv?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
+                if (csv) {
+                    let lines = csv.trim().split('\n').filter(Boolean);
+                    const header = (lines[0]||'').toLowerCase();
+                    if (header.includes('date') && header.includes('pv')) lines = lines.slice(1);
+                    csvRows = lines.map(l=>{ const [d,p]=l.split(','); return { d:String(d).trim(), pv:Number(p) }; }).filter(r=>r.d && Number.isFinite(r.pv));
+                }
+            } catch(_) {}
+            // PV log closes
+            let logCloses = [];
+            try {
+                const jl = await fetch(`${DATA_PREFIX}portfolio_value_log.jsonl?cb=${Date.now()}`, { cache:'no-store' }).then(r=>r.ok?r.text():'');
+                if (jl) {
+                    const rows = jl.trim().split('\n').map(l=>{ try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+                    const by = new Map();
+                    rows.forEach(r=>{ const k=dayKey(r.timestamp); const arr=by.get(k)||[]; arr.push(r); by.set(k,arr); });
+                    const days=[...by.keys()].sort();
+                    logCloses = days.map(k=>{ const pts=by.get(k).sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp)); const last=pts[pts.length-1]; const pv=(last?.portfolio_value ?? last?.portfolioValue); return (typeof pv==='number')?{d:k,pv}:null; }).filter(Boolean);
+                }
+            } catch(_) {}
+            // Merge
+            let closes = csvRows.slice();
+            if (!closes.length) closes = logCloses.slice();
+            else if (logCloses.length) {
+                const lastCsv = closes[closes.length-1].d;
+                const toAppend = logCloses.filter(r=> r.d > lastCsv);
+                if (toAppend.length) closes = closes.concat(toAppend);
             }
-            const daily = [];
-            for (let i=1;i<rows.length;i++) {
-                const r = (rows[i].p/rows[i-1].p) - 1; // decimal
-                daily.push(r);
-            }
-            METRICS_DAILY_ALL = daily;
-            return METRICS_DAILY_ALL;
+            // Daily returns
+            const daily=[]; for(let i=1;i<closes.length;i++){ const prev=closes[i-1].pv, cur=closes[i].pv; if (Number.isFinite(prev)&&prev>0&&Number.isFinite(cur)) daily.push((cur/prev)-1); }
+            return daily;
         }
 
         function sliceByScope(arr, scope) {
@@ -2843,8 +3036,7 @@
         }
 
         async function initializeMetrics() {
-            await ensureMetricsDaily();
-            // Defaults: avg 90D, sharpe 90D, vol SI
+            // Defaults: avg 90D, sharpe 90D, vol SI (all recomputed from S3 on call)
             await updateAvgCard('90D');
             await updateSharpeCard('90D');
             await updateVolCardSI();
@@ -2866,7 +3058,11 @@
         }
     </script>
     
-    <style>
+            <style>
+        /* Row coloring for P&L; remove any performer dots */
+        tr.position-row.winning { background: rgba(34,197,94,0.08); }
+        tr.position-row.losing { background: rgba(234,88,12,0.08); }
+        .top-performer-item, .top-performer-rank, .top-performer-symbol { display:none !important; }
         /* Formula Modal */
         .formula-modal.hidden { display: none; }
         .formula-modal {
@@ -3082,7 +3278,7 @@
             var side = (typeof p.side === 'number') ? p.side : ((p.contracts||0) >= 0 ? 1 : -1);
             var notional = Math.abs(p.notional || 0);
             if (!notional && typeof p.weight === 'number') {
-              var ref = (window.currentPVPre || window.referenceCapital || 1000000);
+              var ref = 1000000; // fixed reference capital for weights (Pulse)
               notional = Math.abs(p.weight * ref);
             }
             if (!notional) continue;

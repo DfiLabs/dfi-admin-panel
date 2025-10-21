@@ -1,0 +1,47 @@
+2025-10-20 — Pulse independence (CSV reception + execution) and Admin/Pulse fixes
+
+Summary of what I did today:
+
+1) Frontend fixes
+- Pulse: fixed positions scaling to use fixed $1,000,000 reference; deployed and invalidated.
+- Admin: tooltip formatted in UTC and removed weekday label; deployed and invalidated.
+
+2) Legacy schedules and safety
+- Audited EventBridge rules in eu‑west‑3; disabled all 00:30Z executors and legacy PV/mirror jobs. Left only price writers active.
+- On request, temporarily re‑enabled Admin pv‑logger‑admin‑5m, confirmed PV appends resumed.
+
+3) Orchestrator and triggers
+- Added S3 PutObject triggers to execution‑orchestrator for Pulse per‑strategy prefixes (unravel, ridge, ml_qube).
+- Verified triggers and widened events to ObjectCreated:*.
+
+4) Mirror cleanup
+- Removed the Pulse CSV mirror from S3 bucket notifications to avoid root‑path writes and confusion.
+
+5) Ubuntu monitor — dual upload (Admin + Pulse per strategy)
+- Modified csv-monitor-email.py to:
+  • Upload each detected monitor_signal_DF_*.csv to BOTH envs per strategy:
+    Admin: signal-dashboard/data/{strategy}/
+    Pulse: descartes-ml/signal-dashboard/data/{strategy}/
+  • Write per‑strategy latest.json to BOTH envs with real updated_utc.
+  • Leave detection-only (no PV/baseline writes).
+- Set ENV default to ADMIN.
+- Deployed to Ubuntu via SSM:
+  • Installed to /opt/dfi-monitor/csv-monitor-email.py
+  • Created/started systemd service csv-monitor (ENV=ADMIN). Service is active.
+  • Log shows dual-upload behavior and per‑strategy latest.json updates.
+
+6) Verifications (read-only)
+- Ubuntu latest CSV: monitor_signal_DF_20251019-2355.csv present.
+- Admin unravel latest.json → monitor_signal_DF_20251019-2355.csv; CSV exists on S3.
+- Pulse unravel per‑strategy latest.json updated (01:41:30Z) after dual-upload.
+- Admin PV appended with today’s CSV; Pulse PV per‑minute continued (independent).
+- Prices latest_prices.json fresh and complete (29 tickers).
+
+Next steps / expectations
+- On tomorrow’s CSV drop, both Admin and Pulse per‑strategy prefixes will receive the CSV and latest.json via the monitor.
+- execution‑orchestrator will write pre_execution.json and daily_baseline.json under BOTH envs per strategy after the MIN_DELAY (~5 minutes).
+- Pulse PV logger remains independent and will read Pulse’s per‑strategy daily_baseline.json (no cross‑sync), preventing saw‑tooth behaviors.
+
+Notes
+- All PV histories remain append‑only; versioning intact.
+- Legacy 00:30Z/sync jobs remain disabled to prevent unintended writes.
