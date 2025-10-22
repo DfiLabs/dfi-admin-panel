@@ -233,6 +233,63 @@ def send_execution_email(ses_region: str, sender: str, recipient: str, subject: 
         },
     )
 
+
+def _read_prices_map(s3, bucket: str, key: str) -> Dict[str, Any]:
+    txt = read_object_text(s3, bucket, key)
+    if not txt:
+        return {}
+    try:
+        doc = json.loads(txt)
+        return (doc.get("prices") or {}) if isinstance(doc, dict) else {}
+    except Exception:
+        return {}
+
+
+def merge_env_prices(s3, bucket: str) -> Dict[str, Any]:
+    """Merge Admin and Pulse latest price maps (no network calls)."""
+    adm = _read_prices_map(s3, bucket, f"{ADMIN_BASE}/latest_prices.json")
+    pul = _read_prices_map(s3, bucket, f"{PULSE_BASE}/latest_prices.json")
+    merged = {}
+    # prefer pulse values when present, then admin
+    for k, v in {**adm, **pul}.items():
+        try:
+            merged[k] = float(v)
+        except Exception:
+            continue
+    for k, v in pul.items():
+        try:
+            merged[k] = float(v)
+        except Exception:
+            continue
+    return merged
+
+
+def wait_for_full_coverage(
+    s3,
+    bucket: str,
+    env: str,
+    csv_symbols: list,
+    max_wait_seconds: int = 60,
+    poll_interval_seconds: int = 2,
+) -> Tuple[Dict[str, Any], int, list]:
+    """Retry until all CSV symbols have marks (considering alias map).
+
+    Returns: (prices_map, retries, missing_symbols)
+    """
+    retries = 0
+    deadline = time.time() + max_wait_seconds
+    while True:
+        prices = merge_env_prices(s3, bucket)
+        missing = []
+        for sym in csv_symbols:
+            key = sym if sym in prices else ALIAS_MAP.get(sym)
+            if not (key and key in prices):
+                missing.append(sym)
+        if not missing or time.time() >= deadline:
+            return prices, retries, missing
+        time.sleep(poll_interval_seconds)
+        retries += 1
+
 def _append_jsonl(s3, bucket: str, key: str, entry: Dict[str, Any]) -> None:
     try:
         existing = read_object_text(s3, bucket, key) or ""
@@ -304,18 +361,14 @@ def handler(event, context):
         # Snapshot pv_pre from PV log
         pv_pre = read_last_pv(s3, bucket, env, strategy)
 
-        # Read latest prices for this env
-        latest_prices_txt = read_object_text(s3, bucket, latest_prices_key_for(env))
-        prices_map: Dict[str, Any] = {}
-        if latest_prices_txt:
-            try:
-                prices_doc = json.loads(latest_prices_txt)
-                prices_map = prices_doc.get("prices", {}) or {}
-            except Exception:
-                prices_map = {}
-
-        # Parse CSV weights and build baseline at live prices
+        # Parse CSV weights
         weights = parse_weights_from_csv(csv_text)
+        csv_syms = extract_csv_symbols(csv_text)
+
+        # Wait/retry for full marks coverage (merge Admin+Pulse maps)
+        prices_map, retries, missing = wait_for_full_coverage(s3, bucket, env, csv_syms, max_wait_seconds=60, poll_interval_seconds=2)
+
+        # Build baseline at live prices (after coverage check)
         filtered_weights, ref_prices, universe = build_baseline(weights, prices_map)
 
         now_iso = _utc_now_iso()
@@ -339,6 +392,8 @@ def handler(event, context):
             "audit": {
                 "csv_key": key,
                 "price_feed_key": latest_prices_key_for(env),
+                "retries": int(retries),
+                "missing_after_wait": missing,
             },
         }
         write_json(s3, bucket, f"{base_prefix}/{strategy}/daily_baseline.json", baseline_payload)
@@ -413,6 +468,7 @@ def handler(event, context):
                     f"missing_entry_from_baseline: {missing_entry}\n"
                     f"missing_mark_from_prices: {missing_mark}\n"
                     f"alias_used_for_marks: {alias_used}\n"
+                    f"price_wait_retries: {retries}, missing_after_wait: {missing}\n"
                     f"pv_tail(3): {json.dumps(pv_tail_compact)}\n"
                     f"entry_source: s3://{bucket}/{baseline_key} (ref_prices)\n"
                     f"mark_source: s3://{bucket}/{mark_source}\n"
