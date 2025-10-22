@@ -1688,7 +1688,7 @@
                 }
 
                 // Bucket sizes per timeframe
-                let bucketMinutes = 5; // default for 1D
+                let bucketMinutes = 10; // smoother 1D display: 10-minute buckets
                 if (timeframe === '7D') bucketMinutes = 30;
                 if (timeframe === '1M') bucketMinutes = 120;
 
@@ -2604,8 +2604,8 @@
         // Initialize mobile optimizations
         initMobileOptimizations();
         
-            // Load historical PV data from S3 first, THEN load CSV and start snapshots
-            loadHistoricalPVData('1D').then(historicalData => {
+        // Load historical PV data from S3 first, THEN load CSV and start snapshots
+        loadHistoricalPVData('1D').then(historicalData => {
             console.log(`📊 Loaded ${historicalData.length} historical PV points from S3`);
             console.log('📊 S3 Data:', historicalData);
             pvLogs = historicalData;
@@ -2619,7 +2619,9 @@
                 }
             }
             
-            updateChart(historicalData, '1D'); // Pass the data directly to show full chart
+            // Default view should be smoothed: resample 1D before first render
+            const displayData = resampleForTimeframe(historicalData, '1D');
+            updateChart(displayData, '1D');
             // Initialize S3-derived metrics cards immediately
             initializeMetrics();
 
@@ -2791,8 +2793,9 @@
                 const timeframe = activeButton ? activeButton.textContent : '1D';
                 let displayData;
                 if (timeframe === '1D') {
-                    // For 1D: show raw PV every 5 minutes from S3 JSONL, and append current PV as final point
-                    displayData = s3Data.map(pt => ({ timestamp: pt.timestamp, portfolio_value: (pt.portfolio_value ?? pt.portfolioValue) })).filter(d => typeof d.portfolio_value === 'number');
+                    // For 1D: build from S3 JSONL then resample via the same resampler (10-min buckets)
+                    const raw = s3Data.map(pt => ({ timestamp: pt.timestamp, portfolio_value: (pt.portfolio_value ?? pt.portfolioValue) })).filter(d => typeof d.portfolio_value === 'number');
+                    displayData = resampleForTimeframe(raw, '1D');
                     try {
                         const now = new Date();
                         const last = displayData[displayData.length-1];
