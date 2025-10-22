@@ -46,6 +46,9 @@ STRATEGY_DIRS = {
     'ml_qube': '/home/leo/Desktop/dfilabs-machine-v2/dfilabs-machine-v2/signal/ml_qube/monitor/signal/'
 }
 
+# Persistent state for idempotency (survives restarts)
+STATE_PREFIX = 'signal-dashboard/ops/'
+
 def s3_prefix_for(strategy: str) -> str:
     base = 'descartes-ml/signal-dashboard/data' if ENV == 'PULSE' else 'signal-dashboard/data'
     return f"{base}/{strategy}/"
@@ -53,6 +56,46 @@ def s3_prefix_for(strategy: str) -> str:
 def s3_prefix_for_env(env: str, strategy: str) -> str:
     base = 'descartes-ml/signal-dashboard/data' if env.upper() == 'PULSE' else 'signal-dashboard/data'
     return f"{base}/{strategy}/"
+
+
+def parse_stamp(name: str) -> tuple[int, int]:
+    """Return (YYYYMMDD, HHMM) or (0,0)."""
+    try:
+        import re
+        m = re.search(r'(\d{8})-(\d{4})', name or '')
+        return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    except Exception:
+        return (0, 0)
+
+
+def utc_yesterday_yyyymmdd() -> int:
+    yday = datetime.datetime.utcnow().date() - datetime.timedelta(days=1)
+    return int(yday.strftime('%Y%m%d'))
+
+
+def read_state(strategy: str) -> dict | None:
+    try:
+        s3 = boto3.client('s3')
+        key = f"{STATE_PREFIX}monitor_state_{strategy}.json"
+        obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=key)
+        return json.loads(obj['Body'].read().decode('utf-8', 'ignore'))
+    except Exception:
+        return None
+
+
+def write_state(strategy: str, filename: str, sha256: str, mtime_epoch: int) -> None:
+    try:
+        s3 = boto3.client('s3')
+        key = f"{STATE_PREFIX}monitor_state_{strategy}.json"
+        payload = {
+            'filename': filename,
+            'sha256': sha256,
+            'mtime_epoch': int(mtime_epoch),
+            'updated_utc': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+        }
+        s3.put_object(Bucket=S3_BUCKET_NAME, Key=key, Body=json.dumps(payload).encode('utf-8'), CacheControl='no-store', ContentType='application/json')
+    except Exception:
+        pass
 
 
 def log(msg: str) -> None:
@@ -1054,9 +1097,38 @@ def main() -> None:
             csv_sha256 = compute_csv_sha256(csv_content)
             log(f"📄 CSV SHA256: {csv_sha256}")
             
-            # Check idempotency
+            # Check idempotency (strict guards)
             if csv_sha256 == last_executed_sha256.get(strategy):
                 log(f"⏭️ Skipping duplicate CSV {latest} (same SHA256)")
+                continue
+
+            # Strict filename guard: only yesterday UTC and 2355
+            cand_d, cand_t = parse_stamp(latest)
+            yday = utc_yesterday_yyyymmdd()
+            if not (cand_d == yday and cand_t == 2355):
+                log(f"⏭️ Skip {latest}: requires yesterday UTC and 2355 (got {cand_d}-{cand_t})")
+                last_processed[strategy] = latest
+                last_executed_sha256[strategy] = csv_sha256
+                continue
+
+            # Persisted state (S3) to survive restarts
+            state = read_state(strategy) or {}
+            st_sha = state.get('sha256')
+            st_mtime = int(state.get('mtime_epoch') or 0)
+            cand_mtime = 0
+            try:
+                cand_mtime = sudo_stat_epoch(os.path.join(dir_path, latest))
+            except Exception:
+                pass
+            if st_sha and csv_sha256 == st_sha:
+                log(f"⏭️ Skip {latest}: same SHA as persisted state")
+                last_processed[strategy] = latest
+                last_executed_sha256[strategy] = csv_sha256
+                continue
+            if cand_mtime and st_mtime and cand_mtime <= st_mtime:
+                log(f"⏭️ Skip {latest}: mtime not newer than persisted state (cand={cand_mtime}, prev={st_mtime})")
+                last_processed[strategy] = latest
+                last_executed_sha256[strategy] = csv_sha256
                 continue
 
             # Remember previous latest from S3 before we switch
@@ -1135,6 +1207,8 @@ def main() -> None:
             write_pre_execution_pending(latest, csv_sha256, strategy)
             last_processed[strategy] = latest
             last_executed_sha256[strategy] = csv_sha256
+            # Persist state
+            write_state(strategy, latest, csv_sha256, cand_mtime or int(time.time()))
             log(f'⏹️ Detection pipeline complete for {strategy} (pre_execution.json written); deferring execution to scheduled time')
             # Next strategy
             continue

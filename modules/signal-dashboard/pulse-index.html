@@ -303,18 +303,49 @@
                 </div>
             </div>
 
-            <!-- Top Performers -->
-            <div class="top-performers">
-                <div class="top-performers-card longs">
-                    <h4>Top Long Performers</h4>
-                    <div id="top-long-performers">
-                        <div class="loading">Loading top long performers...</div>
-                    </div>
-                </div>
-                <div class="top-performers-card shorts">
-                    <h4>Top Short Performers</h4>
-                    <div id="top-short-performers">
-                        <div class="loading">Loading top short performers...</div>
+            <!-- Momentum Breadth Module (replaces Top Performers) -->
+            <div id="breadth-row" class="summary-cards" style="grid-template-columns: 1fr !important;">
+                <div class="card" style="flex:1 1 100%; width:100%">
+                    <div style="display:flex; gap:18px; align-items:center; justify-content:space-between; flex-wrap:wrap">
+                        <div style="display:flex; align-items:center; gap:14px; min-width:260px">
+                            <div id="breadth-donut-wrap" style="position:relative; width:120px; height:120px">
+                                <canvas id="breadth-donut" width="120" height="120" style="max-width:120px"></canvas>
+                                <div id="breadth-tick-45" class="donut-tick" title="Amber floor 45%"></div>
+                                <div id="breadth-tick-60" class="donut-tick" title="Green floor 60%"></div>
+                            </div>
+                            <div>
+                                <h3>Momentum Breadth</h3>
+                                <div class="value breadth-value" id="breadth-label" title="Breadth = Σ aligned notional / Σ total (aligned if side×(mark/entry−1) > 0.0005)">Loading…</div>
+                                <div><sup id="delta-breadth" class="delta" style="display:none">Δ –</sup></div>
+                                <div class="subtext">% notional aligned with side (mark vs entry)</div>
+                                <div id="breadth-side-chips" style="margin-top:6px; display:flex; gap:8px">
+                                    <div class="chip long" id="chip-long"><span class="chip-icon">▲</span><span class="chip-text" id="chip-long-text">Long --%</span><span class="chip-bar"><span class="chip-fill" id="chip-long-bar" style="width:0%"></span></span></div>
+                                    <div class="chip short" id="chip-short"><span class="chip-icon">▼</span><span class="chip-text" id="chip-short-text">Short --%</span><span class="chip-bar"><span class="chip-fill" id="chip-short-bar" style="width:0%"></span></span></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:28px; align-items:center; flex:1; min-width:420px; justify-content:space-between">
+                            <div>
+                                <div class="kpi-label">Strength <sup id="delta-strength" class="delta">Δ –</sup></div>
+                                <div id="strength-wrap" style="position:relative; min-width:120px">
+                                    <canvas id="breadth-spark" height="28" style="position:absolute; inset:0; opacity:0.25"></canvas>
+                                    <div class="kpi-value" id="breadth-strength" title="Size-weighted signed return (bp)">–</div>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="kpi-label">Dispersion (IQR) <sup id="delta-dispersion" class="delta" style="display:none">Δ –</sup></div>
+                                <div class="kpi-value" id="breadth-dispersion" title="IQR of side-adjusted returns (bp)">–</div>
+                            </div>
+                            <div>
+                                <div class="kpi-label">N_eff</div>
+                                <div id="neff-wrap" style="display:flex; align-items:center; gap:8px; min-width:160px">
+                                    <span class="neff-bound">0</span>
+                                    <div class="neff-bar" id="neff-bar"><span class="neff-dot" id="neff-dot"></span></div>
+                                    <span class="neff-bound">30</span>
+                                    <div class="kpi-value" id="breadth-neff" title="Effective bets N_eff = 1/Σ w² (abs weights)">–</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -433,6 +464,9 @@
                 console.log('⚠️ Error resolving symbol from position:', err, p);
                 return null;
             }
+
+            // Render Momentum Breadth module
+            try { renderBreadthModule(); } catch (e) { console.warn('breadth render error', e); }
         }
         let currentSnapshot = {
             timestamp: null,
@@ -802,6 +836,7 @@
                         if (currentSnapshot.positions && currentSnapshot.positions.length > 0) {
                             try {
                                 currentSnapshot.currentPrices = await fetchCurrentPrices(currentSnapshot.positions);
+                                try { renderBreadthModule(); } catch(_) {}
                             } catch (e) {
                                 console.log('⚠️ Failed to load current prices for table rendering:', e);
                             }
@@ -2034,6 +2069,7 @@
 
         // Delta Donut Chart
         let deltaDonutChart = null;
+        let breadthDonut = null;
         
         function createDeltaProgressBar() {
             // Calculate portfolio delta using corrected formula
@@ -2066,6 +2102,128 @@
             progressIndicator.style.left = `${progressPosition}%`;
             progressIndicator.style.backgroundColor = netDeltaPercent >= 0 ? 
                 'rgba(102, 126, 234, 1)' : 'rgba(239, 68, 68, 1)';
+        }
+
+        // --- Momentum Breadth renderer ---
+        function renderBreadthModule(){
+            try{
+                const positions = currentSnapshot.positions || [];
+                const baseline = currentSnapshot.baselinePrices || {};
+                const marks = currentSnapshot.currentPrices || {};
+                if (!positions.length || !Object.keys(baseline).length || !Object.keys(marks).length) return;
+
+                let alignedNotional = 0, totalNotional = 0;
+                let returns = [];
+                let w2sum = 0; // for N_eff
+
+                // epsilon to avoid flicker when mark ≈ entry (5 bp)
+                const EPS = 0.0005;
+                let longAligned=0, longTotal=0, shortAligned=0, shortTotal=0;
+                positions.forEach(p=>{
+                    const sym = (p.ticker || p.ric || p.internal_code || '').replace('_','');
+                    const base = Number(baseline[sym]);
+                    const cur = Number(marks[sym]);
+                    const notional = Math.abs(Number(p.target_notional||0));
+                    const side = Number(p.target_contracts||0) >= 0 ? 1 : -1;
+                    if (!Number.isFinite(base) || !Number.isFinite(cur) || !Number.isFinite(notional) || notional<=0) return;
+                    const rawR = (cur - base) / base * side;
+                    const r = rawR; // keep for strength/dispersion
+                    returns.push({r, w:notional});
+                    totalNotional += notional;
+                    if (r>EPS) alignedNotional += notional;
+                    if (side>0){ longTotal += notional; if (rawR>EPS) longAligned += notional; }
+                    else { shortTotal += notional; if (rawR>EPS) shortAligned += notional; }
+                });
+                if (totalNotional<=0) return;
+                const breadth = alignedNotional / totalNotional;
+
+                // Weighted momentum score (bp on capital)
+                let score = 0;
+                returns.forEach(x=>{ score += x.r * (x.w / totalNotional); });
+                const scoreBp = Math.round(score * 10000);
+
+                // Dispersion: IQR of returns (bp)
+                const arr = returns.map(x=>x.r).sort((a,b)=>a-b);
+                const q = p=>{ const idx=(arr.length-1)*p; const lo=Math.floor(idx), hi=Math.ceil(idx); if (hi===lo) return arr[lo]; const t=idx-lo; return arr[lo]*(1-t)+arr[hi]*t; };
+                const iqrBp = Math.round((q(0.75)-q(0.25))*10000);
+
+                // N_eff from normalized notionals
+                returns.forEach(x=>{ const w = x.w/totalNotional; w2sum += w*w; });
+                const nEff = (w2sum>0)? Math.round(1.0 / w2sum) : positions.length;
+
+                // Donut color
+                const pct = Math.round(breadth*100);
+                const color = pct>=60 ? '#10b981' : (pct>=45 ? '#f59e0b' : '#ef4444');
+
+                // Update labels
+                const bl = document.getElementById('breadth-label'); if (bl) bl.textContent = pct + '%';
+                const bs = document.getElementById('breadth-strength'); if (bs) bs.textContent = (scoreBp>=0?'+':'') + scoreBp + ' bp';
+                const bd = document.getElementById('breadth-dispersion'); if (bd) bd.textContent = (iqrBp>=0?'+':'') + iqrBp + ' bp';
+                const ne = document.getElementById('breadth-neff'); if (ne) ne.textContent = nEff;
+                // Side chips
+                const lb = longTotal>0 ? Math.round((longAligned/longTotal)*100) : 0;
+                const sb = shortTotal>0 ? Math.round((shortAligned/shortTotal)*100) : 0;
+                const chipLongText = document.getElementById('chip-long-text'); if (chipLongText) chipLongText.textContent = `Long ${lb}%`;
+                const chipShortText = document.getElementById('chip-short-text'); if (chipShortText) chipShortText.textContent = `Short ${sb}%`;
+                const chipLongBar = document.getElementById('chip-long-bar'); if (chipLongBar) chipLongBar.style.width = lb + '%';
+                const chipShortBar = document.getElementById('chip-short-bar'); if (chipShortBar) chipShortBar.style.width = sb + '%';
+
+                // Donut draw (naive canvas, no extra lib)
+                const canvas = document.getElementById('breadth-donut');
+                if (canvas && canvas.getContext){
+                    const ctx = canvas.getContext('2d');
+                    const w = canvas.width, h = canvas.height, r = Math.min(w,h)/2 - 6;
+                    ctx.clearRect(0,0,w,h);
+                    // background with inner shadow
+                    const bgGrad = ctx.createLinearGradient(0,0,0,h); bgGrad.addColorStop(0,'#f3f4f6'); bgGrad.addColorStop(1,'#e5e7eb');
+                    ctx.beginPath(); ctx.strokeStyle = bgGrad; ctx.lineWidth = 10; ctx.arc(w/2,h/2,r,0,2*Math.PI); ctx.stroke();
+                    // animated value arc
+                    const start = -Math.PI/2; const targetEnd = start + 2*Math.PI*(pct/100);
+                    const prev = canvas._prev || start; const now = Date.now(); const dur=280; const t0=canvas._t0||now; const p=Math.min(1,(now-t0)/dur);
+                    const curEnd = prev + (targetEnd - prev) * (1 - Math.cos(p*Math.PI))/2; // ease-out
+                    const grad = ctx.createLinearGradient(0,0,w,0); grad.addColorStop(0,'#93c5fd'); grad.addColorStop(1,color);
+                    ctx.beginPath(); ctx.strokeStyle = grad; ctx.lineWidth = 10; ctx.lineCap='round'; ctx.arc(w/2,h/2,r,start,curEnd); ctx.stroke();
+                    // highlight edge
+                    ctx.beginPath(); ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2; ctx.arc(w/2,h/2,r,start,curEnd); ctx.stroke();
+                    canvas._prev = curEnd; canvas._t0 = (p>=1)? now : t0; if (p<1) requestAnimationFrame(()=>renderBreadthModule());
+                    // threshold ticks at 45% and 60%
+                    const pos = (pct)=>{ const ang=start+2*Math.PI*(pct/100); const x=w/2 + r*Math.cos(ang); const y=h/2 + r*Math.sin(ang); return {x,y}; };
+                    const t45=pos(45), t60=pos(60);
+                    const tk45=document.getElementById('breadth-tick-45'); const tk60=document.getElementById('breadth-tick-60');
+                    if (tk45){ tk45.style.left=t45.x+'px'; tk45.style.top=t45.y+'px'; }
+                    if (tk60){ tk60.style.left=t60.x+'px'; tk60.style.top=t60.y+'px'; }
+                }
+
+                // Sparkline of recent scores (keep 60 samples)
+                window._breadthSeries = window._breadthSeries || [];
+                window._breadthSeries.push(score);
+                if (window._breadthSeries.length>60) window._breadthSeries.shift();
+                const sp = document.getElementById('breadth-spark');
+                if (sp && sp.getContext && window._breadthSeries.length>1){
+                    const ctx = sp.getContext('2d'); const w=sp.width=(sp.clientWidth||180); const h=sp.height=sp.height; ctx.clearRect(0,0,w,h);
+                    const s = window._breadthSeries; const min=Math.min(...s), max=Math.max(...s); const rng = (max-min)||1e-6;
+                    ctx.shadowColor = (score>=0)? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)'; ctx.shadowBlur=8;
+                    ctx.beginPath(); ctx.strokeStyle = (score>=0)? '#10b981' : '#ef4444'; ctx.lineWidth = 2; s.forEach((v,i)=>{ const x=i*(w/(s.length-1)); const y=h - ((v-min)/rng)*h; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }); ctx.stroke(); ctx.shadowBlur=0;
+                }
+                // deltas vs lookback (last 5 samples)
+                const lookback = Math.min(5, window._breadthSeries.length-1);
+                if (lookback>0){
+                    const prevScore = window._breadthSeries[window._breadthSeries.length-1-lookback];
+                    const dScoreBp = Math.round((score - prevScore)*10000);
+                    const ds = document.getElementById('delta-strength'); if (ds) { ds.style.display='inline'; ds.textContent = `Δ ${(dScoreBp>=0?'+':'')}${dScoreBp} bp`; }
+                    // breadth delta
+                    window._breadthPctSeries = window._breadthPctSeries || [];
+                    window._breadthPctSeries.push(pct/100);
+                    if (window._breadthPctSeries.length>60) window._breadthPctSeries.shift();
+                    const prevPct = window._breadthPctSeries[Math.max(0, window._breadthPctSeries.length-1-lookback)] || pct/100;
+                    const dPct = Math.round(((pct/100 - prevPct)*100));
+                    const db = document.getElementById('delta-breadth'); if (db) { db.style.display='inline'; db.textContent = `Δ ${(dPct>=0?'+':'')}${dPct} pp`; }
+                    // dispersion delta uses IQR bp change
+                    const dd = document.getElementById('delta-dispersion'); if (dd) { dd.style.display='inline'; dd.textContent = `Δ ${(iqrBp>=0?'+':'')}${iqrBp} bp`; }
+                }
+                // N_eff micro bar
+                const bar = document.getElementById('neff-bar'); const dot = document.getElementById('neff-dot'); if (dot){ const pctN = Math.max(0, Math.min(30, nEff))/30; dot.style.left = (pctN*120)+'px'; if(bar){ bar.style.background = (nEff<8)? '#fee2e2' : (nEff<12? '#fde68a' : '#d1fae5'); } }
+            } catch(e){ console.warn('breadth calc error', e); }
         }
         
         function calculatePortfolioDelta() {
@@ -3066,6 +3224,18 @@
         tr.position-row.winning { background: rgba(34,197,94,0.08); }
         tr.position-row.losing { background: rgba(234,88,12,0.08); }
         .top-performer-item, .top-performer-rank, .top-performer-symbol { display:none !important; }
+        .kpi-label { color:#6b7280; font-size:12px; margin-bottom:4px; }
+        .kpi-value { font-weight:700; font-size:18px; font-variant-numeric: tabular-nums; }
+        .breadth-value { font-size:56px; line-height:1; }
+        .donut-tick { position:absolute; width:6px; height:6px; border-radius:50%; background:#9ca3af; box-shadow:0 0 0 2px #fff; transform:translate(-50%,-50%); opacity:.8 }
+        .chip { display:flex; align-items:center; gap:6px; border:1px solid #e5e7eb; padding:4px 8px; border-radius:999px; font-size:12px; color:#111827 }
+        .chip .chip-bar { display:inline-block; width:54px; height:6px; border-radius:999px; background:#e5e7eb; overflow:hidden }
+        .chip .chip-fill { display:block; height:100%; background:#a5b4fc }
+        .chip.long .chip-fill { background:#a7f3d0 }
+        .chip.short .chip-fill { background:#fecaca }
+        .delta { color:#9ca3af; font-weight:600; }
+        .neff-bar { position:relative; width:120px; height:6px; border-radius:999px; background:#e5e7eb }
+        .neff-dot { position:absolute; top:50%; width:10px; height:10px; border-radius:50%; background:#6366f1; transform:translate(-50%,-50%); box-shadow: 0 0 0 1px #fff }
         /* Formula Modal */
         .formula-modal.hidden { display: none; }
         .formula-modal {
